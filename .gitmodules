@@ -1,0 +1,8 @@
+[submodule "remusys-ir"]
+	path = remusys-ir
+	url = https://github.com/medihbt/remusys-ir
+	branch = master
+[submodule "remusys-lang"]
+	path = remusys-lang
+	url = https://github.com/medihbt/remusys-lang
+	branch = master

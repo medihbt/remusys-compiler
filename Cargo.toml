@@ -1,0 +1,8 @@
+[package]
+name = "remusys-compiler"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+remusys-lang = { path = "../remusys-lang" }
+remusys-ir = { path = "../remusys-ir" }
