@@ -10,8 +10,11 @@ fn remusys_main(file_path: &Path) -> Result<(), String> {
 }
 
 fn main() {
+    // Placeholder for the actual implementation.
+    // This is where the main logic of the Remusys interpreter would be executed.
     let file_path = Path::new("example.sy");
 
+    // 8MB stack size too small for some test cases, using 64MB instead
     let remusys_main_thread = std::thread::Builder::new()
         .name("remusys_main_thread".to_string())
         .stack_size(64 * 1024 * 1024) // 64 MB stack size
