@@ -19,11 +19,17 @@ use remusys_ir::{
     },
 };
 use remusys_lang::ast::{
-    expr::{literal::Literal, Expr}, stmt::{decl::{Function as AstFunc, VarDecl}, Stmt}, AstModule
+    AstModule,
+    expr::{Expr, literal::Literal},
+    stmt::{
+        Stmt,
+        decl::{Function as AstFunc, VarDecl},
+    },
 };
 use symbol::SymbolMap;
 use typing::TypeInfo;
 
+pub mod expr;
 pub mod symbol;
 pub mod typing;
 
@@ -131,92 +137,9 @@ impl IRTranslator {
         todo!("Translate function declaration: {function:?}");
     }
     fn translate_const_expr(&mut self, expr: &Expr) -> ValueSSA {
-        match expr {
-            Expr::None => ValueSSA::ConstData(ConstData::Undef(ValTypeID::Void)),
-            Expr::Literal(literal) => {
-                let const_data = match literal {
-                    Literal::Int(i) => ConstData::Int(32, *i as i128),
-                    Literal::Float(f) => ConstData::Float(FloatTypeKind::Ieee32, *f as f64),
-                };
-                ValueSSA::ConstData(const_data)
-            }
-            Expr::String(s) => {
-                let str_global_ref = self.translate_string_literal(s);
-                ValueSSA::Global(str_global_ref)
-            }
-            Expr::ArrayInitList(arr) => todo!(),
-            Expr::Ident(ident) => todo!(),
-            Expr::ArrayIndex(array_index) => todo!(),
-            Expr::BinOP(alu) => todo!(),
-            Expr::CmpOP(cmp) => todo!(),
-            Expr::ShortCircuit(logic) => todo!(),
-            Expr::UnaryOP(unary_exp) => todo!(),
-            Expr::Call(call) => todo!(),
-            Expr::Assign(assign) => todo!(),
-            Expr::ImplicitCast(cast) => todo!(),
-            Expr::IntrinsicTimeStart(lineno) => {
-                let time_start_inst = self
-                    .ir_builder
-                    .add_call_inst(
-                        self.ast_intrinsic_funcs.start_time,
-                        [ValueSSA::ConstData(ConstData::Int(32, *lineno as i128))].into_iter(),
-                    )
-                    .unwrap();
-                ValueSSA::Inst(time_start_inst)
-            }
-            Expr::IntrinsicTimeEnd(lineno) => {
-                let time_end_inst = self
-                    .ir_builder
-                    .add_call_inst(
-                        self.ast_intrinsic_funcs.stop_time,
-                        [ValueSSA::ConstData(ConstData::Int(32, *lineno as i128))].into_iter(),
-                    )
-                    .unwrap();
-                ValueSSA::Inst(time_end_inst)
-            }
-            Expr::RawInitList(_) => todo!(),
-        }
+        todo!("Translate constant expression: {expr:?}");
     }
     fn translate_string_literal(&mut self, string: &str) -> GlobalRef {
-        if let Some(global_ref) = self.strings.get(string) {
-            return global_ref.clone();
-        }
-        // String symbol name: mangle(`Core::Builtin::StringLiteral`).$id
-        let str_name = format!("_Z4Core7Builtin14StringLiteral.{}", self.strings.len());
-        let str_arrty = self.type_ctx.make_array_type(
-            string.len() + 1,  // +1 for null terminator
-            ValTypeID::Int(8), // char type
-        );
-        let str_initval = ConstExprData::Array(Array {
-            arrty: str_arrty.clone(),
-            elems: string
-                .bytes()
-                .map(|b| ValueSSA::ConstData(ConstData::Int(8, b as i128)))
-                .chain(std::iter::once(ValueSSA::ConstData(ConstData::Int(
-                    8, 0, // null terminator
-                ))))
-                .collect(),
-        });
-        let str_initval = self.ir_builder.module.insert_expr(str_initval);
-
-        let str_global = Var {
-            common: GlobalDataCommon {
-                name: str_name.clone(),
-                content_ty: ValTypeID::Array(str_arrty.clone()),
-                self_ref: Cell::new(GlobalRef::new_null()),
-            },
-            inner: Cell::new(VarInner {
-                readonly: true,
-                align_log2: 0,
-                init: ValueSSA::ConstExpr(str_initval),
-            }),
-        };
-        let str_global_ref = self
-            .ir_builder
-            .module
-            .insert_global(GlobalData::Var(str_global));
-        self.strings
-            .insert(string.to_string(), str_global_ref.clone());
-        str_global_ref
+        expr::translate_string_literal(&mut self.ir_builder, &mut self.strings, string)
     }
 }

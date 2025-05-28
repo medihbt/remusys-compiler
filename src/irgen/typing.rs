@@ -5,6 +5,7 @@ use remusys_ir::typing::{
 };
 use remusys_lang::typing::AstType;
 
+#[derive(Debug)]
 pub(super) enum TypeInfo {
     Trivial(ValTypeID),
     FixArray(ArrayTypeRef /* pointee */),
