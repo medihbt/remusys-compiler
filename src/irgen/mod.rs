@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, hash::Hash, rc::Rc};
+use std::{cell::Cell, collections::HashMap, hash::Hash, ops::Deref, rc::Rc};
 
 use remusys_ir::{
     base::NullableValue,
@@ -11,6 +11,7 @@ use remusys_ir::{
         },
         global::{GlobalData, GlobalDataCommon, GlobalRef, Var, VarInner},
         module::Module as IRModule,
+        opcode::Opcode,
         util::builder::{IRBuilder, IRBuilderFocus},
     },
     typing::{
@@ -19,10 +20,19 @@ use remusys_ir::{
         types::FloatTypeKind,
     },
 };
-use remusys_lang::ast::{
-    expr::{literal::Literal, Expr as AstExpr}, stmt::{
-        block::Block as AstBlock, decl::{Function as AstFunc, VarDecl}, whilestmt::WhileStmt, Stmt
-    }, AstModule
+use remusys_lang::{
+    ast::{
+        AstModule,
+        expr::{Expr as AstExpr, ident::Ident, literal::Literal, unaryop::ImplicitCast},
+        operator::Operator,
+        stmt::{
+            Stmt,
+            block::Block as AstBlock,
+            decl::{Function as AstFunc, VarDecl},
+            whilestmt::WhileStmt,
+        },
+    },
+    typing::AstType,
 };
 use symbol::{SymbolMap, VariableSymbol};
 use typing::TypeInfo;
@@ -54,15 +64,15 @@ impl Deref for WhileLoopRef {
 
 struct WhileLoopInfo {
     entry_block: IRBlockRef,
-    body_block:  IRBlockRef,
-    exit_block:  IRBlockRef,
+    body_block: IRBlockRef,
+    exit_block: IRBlockRef,
 }
 
 struct FunctionState {
     ir_func: GlobalRef,
     entry_block: IRBlockRef,
-    curr_block:  IRBlockRef,
-    while_loop_map: HashMap<WhileLoopRef, WhileLoopInfo>
+    curr_block: IRBlockRef,
+    while_loop_map: HashMap<WhileLoopRef, WhileLoopInfo>,
 }
 
 pub struct IRTranslator {
@@ -265,13 +275,6 @@ impl IRTranslator {
             self.translate_function_body(ast_func, func_ref, body);
         }
     }
-    fn translate_function_body(
-        &mut self,
-        ast_func: &Rc<AstFunc>,
-        ir_func: GlobalRef,
-        ast_body: &AstBlock,
-    ) {
-    }
 
     fn translate_expr_force_const(&mut self, expr: &AstExpr, type_req: ValTypeID) -> ValueSSA {
         match expr {
@@ -292,8 +295,219 @@ impl IRTranslator {
             _ => panic!("Expected a constant expression, but got: {:?}", expr),
         }
     }
-    fn translate_expr_stmt(&mut self, expr: &AstExpr) -> ValueSSA {
-        todo!("Translate expression statement");
+}
+
+impl IRTranslator {
+    fn translate_function_body(
+        &mut self,
+        ast_func: &Rc<AstFunc>,
+        func_ref: GlobalRef,
+        body: &AstBlock,
+    ) {
+        let entry_block = self.ir_builder.get_focus_full().block;
+        let entry_next = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .unwrap();
+        let mut func_state = FunctionState {
+            ir_func: func_ref,
+            entry_block,
+            curr_block: entry_next,
+            while_loop_map: HashMap::new(),
+        };
+        self.ir_builder.set_focus(IRBuilderFocus::Block(entry_next));
+
+        // 调整结束语句: 如果函数返回类型是 void 则把末尾的换成 `ret void` 指令
+        if let AstType::Void = ast_func.ret_type {
+            self.ir_builder.focus_set_return(ValueSSA::None).unwrap();
+        }
+
+        // Translate the function body block
+        self.translate_block(&mut func_state, body);
+    }
+
+    fn translate_block(&mut self, func_stat: &mut FunctionState, ast_block: &AstBlock) {
+        for (idx, stmt) in ast_block.stmts.iter().enumerate() {
+            let is_block_end = idx == ast_block.stmts.len() - 1;
+            self.translate_stmt(func_stat, stmt, is_block_end);
+        }
+    }
+
+    fn translate_stmt(&mut self, func_stat: &mut FunctionState, stmt: &Stmt, is_block_end: bool) {
+        match stmt {
+            Stmt::Block(block) => self.translate_block(func_stat, &block),
+            Stmt::VarDecl(local) => todo!(),
+            Stmt::If(if_stmt) => todo!(),
+            Stmt::While(while_stmt) => todo!(),
+            Stmt::ExprStmt(expr_stmt) => todo!(),
+            Stmt::BreakTo(weak) => todo!(),
+            Stmt::ContinueTo(weak) => todo!(),
+            Stmt::Return(expr) => {
+                let retval = self.translate_alu_expr(func_stat, expr);
+                let curr_block = func_stat.curr_block;
+                let (retval_block, new_focus) = if is_block_end {
+                    // If this is the last statement in the block, we can use the current block
+                    // as the return block.
+                    (curr_block, curr_block)
+                } else {
+                    // Otherwise, we need to create a new block for the return statement.
+                    let next_block = self
+                        .ir_builder
+                        .split_current_block_from_terminator()
+                        .unwrap();
+                    func_stat.curr_block = next_block;
+                    (curr_block, next_block)
+                };
+                self.ir_builder
+                    .set_focus(IRBuilderFocus::Block(retval_block));
+                // Add the return instruction
+                self.ir_builder
+                    .focus_set_return(retval)
+                    .expect("Failed to set return value");
+                // Set the focus to the new block
+                self.ir_builder.set_focus(IRBuilderFocus::Block(new_focus));
+            }
+
+            Stmt::FuncDecl(_) => {
+                panic!(
+                    "Function declaration should not be in function body: {:?}",
+                    func_stat.ir_func
+                );
+            }
+            Stmt::Break | Stmt::Continue | Stmt::UnresolvedVarDecl(_) => {
+                panic!("Unexpected statement in function body: {:?}", stmt);
+            }
+            Stmt::None => { /* Do nothing for empty statements */ }
+        }
+    }
+
+    fn translate_alu_expr(&mut self, func_stat: &mut FunctionState, expr: &AstExpr) -> (ValueSSA, TypeInfo) {
+        match expr {
+            AstExpr::None => (ValueSSA::None, TypeInfo::Trivial(ValTypeID::Void)),
+            AstExpr::Literal(Literal::Int(i)) => {
+                (
+                    ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
+                    TypeInfo::Trivial(ValTypeID::Int(32)),
+                )
+            }
+            AstExpr::Literal(Literal::Float(f)) => {
+                (
+                    ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f32)),
+                    TypeInfo::Trivial(ValTypeID::Float(FloatTypeKind::Ieee32)),
+                )
+            }
+            AstExpr::String(s) => {
+                let str_ref =
+                    expr::translate_string_literal(&mut self.ir_builder, &mut self.strings, s);
+                ValueSSA::Global(str_ref)
+            }
+            AstExpr::Ident(ident) => {
+                // 在规范化的 SST 中, 标识符这种左值要参与数学运算的话,
+                // 一定要经过一步 `LValueToRValue` 的转换. 因此这里
+                // 取到标识符指针的时候就不要再加一个 `load` 指令了.
+                self.symbols.get_ident(ident).unwrap_or_else(|| {
+                    panic!("Identifier `{}` not found in symbol map", ident.get_name())
+                })
+            }
+            AstExpr::ArrayIndex(idx) => {
+                let array = self.translate_alu_expr(func_stat, &idx.array);
+                let indices = idx
+                    .indices
+                    .iter()
+                    .map(|i| self.translate_alu_expr(func_stat, i));
+                let array_typeinfo = TypeInfo::new(&idx.array.ast_type, &self.type_ctx);
+            }
+            AstExpr::BinOP(bin_exp) => todo!(),
+            AstExpr::CmpOP(cmp_exp) => todo!(),
+            AstExpr::UnaryOP(unary) => todo!(),
+            AstExpr::ImplicitCast(cast) => self.translate_alu_implicit_cast(func_stat, cast),
+            AstExpr::Call(call) => todo!(),
+            AstExpr::Assign(assign) => {
+                // Translate the left-hand side expression
+                let lhs = self.translate_alu_expr(func_stat, &assign.lhs);
+                // Translate the right-hand side expression
+                let rhs = self.translate_alu_expr(func_stat, &assign.rhs);
+
+                // Perform the assignment operation
+                let assign_inst = self.ir_builder.add_store_inst(lhs, rhs, 4).unwrap();
+                ValueSSA::Inst(assign_inst)
+            }
+
+            AstExpr::IntrinsicTimeStart(lineno) => {
+                let lineno_value = ValueSSA::ConstData(ConstData::Int(32, *lineno as i128));
+                let call_inst = self
+                    .ir_builder
+                    .add_call_inst(
+                        self.ast_intrinsic_funcs.start_time,
+                        [lineno_value].into_iter(),
+                    )
+                    .unwrap();
+                ValueSSA::Inst(call_inst)
+            }
+            AstExpr::IntrinsicTimeEnd(lineno) => {
+                let lineno_value = ValueSSA::ConstData(ConstData::Int(32, *lineno as i128));
+                let call_inst = self
+                    .ir_builder
+                    .add_call_inst(
+                        self.ast_intrinsic_funcs.stop_time,
+                        [lineno_value].into_iter(),
+                    )
+                    .unwrap();
+                ValueSSA::Inst(call_inst)
+            }
+
+            AstExpr::ArrayInitList(_) => {
+                panic!("Array initializer should not be in an ALU expression context")
+            }
+            AstExpr::ShortCircuit(_) => {
+                panic!("Short-circuit expression should not be in an ALU expression context")
+            }
+            AstExpr::RawInitList(_) => {
+                panic!("Discovered an AST-only raw initializer expression")
+            }
+        }
+    }
+
+    fn translate_alu_implicit_cast(
+        &mut self,
+        func_stat: &mut FunctionState,
+        cast: &ImplicitCast,
+    ) -> ValueSSA {
+        let operand = self.translate_alu_expr(func_stat, &cast.expr);
+        let target_ast_ty = &cast.target;
+        let target_typeinfo = TypeInfo::new(target_ast_ty, &self.type_ctx);
+        let inst = match cast.kind {
+            Operator::ItoF => self.ir_builder.add_cast_inst(
+                Opcode::Sitofp,
+                ValTypeID::Float(FloatTypeKind::Ieee32),
+                operand,
+            ),
+            Operator::FtoI => {
+                self.ir_builder
+                    .add_cast_inst(Opcode::Fptosi, ValTypeID::Int(32), operand)
+            }
+            Operator::BoolToInt => self.ir_builder.add_select_inst(
+                operand,
+                ConstData::make_int_valssa(32, 1),
+                ConstData::make_int_valssa(32, 0),
+            ),
+            Operator::BoolToFloat => self.ir_builder.add_select_inst(
+                operand,
+                ConstData::make_float_valssa(FloatTypeKind::Ieee32, 1.0),
+                ConstData::make_float_valssa(FloatTypeKind::Ieee32, 0.0),
+            ),
+            Operator::LValueToRValue => self.ir_builder.add_load_inst(
+                target_typeinfo.get_alloca_data_type().unwrap(),
+                4,
+                operand,
+            ),
+            _ => panic!(
+                "Unsupported implicit cast operator: {:?} in expression: {:?}",
+                cast.kind, cast.expr
+            ),
+        }
+        .unwrap();
+        ValueSSA::Inst(inst)
     }
 }
 
