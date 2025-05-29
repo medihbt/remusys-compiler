@@ -34,6 +34,26 @@ impl TypeInfo {
     pub fn can_alloca(&self) -> bool {
         self.get_alloca_data_type().is_some()
     }
+    pub fn is_value_semantic(&self) -> bool {
+        match self {
+            TypeInfo::Trivial(ValTypeID::Void) => false,
+            TypeInfo::Trivial(_) => true,
+
+            // SysY 和 C 一样, 不论什么数组类型都会退化成指针, 因此是引用语义.
+            TypeInfo::FixArray(_) => false,
+            TypeInfo::DynArray(_) => false,
+            TypeInfo::Func(_) => false, // Functions are not value semantic
+        }
+    }
+    pub fn is_pointer_semantic(&self) -> bool {
+        match self {
+            TypeInfo::Trivial(ValTypeID::Void) => false,
+            TypeInfo::Trivial(_) => false,
+            TypeInfo::FixArray(_) => true,
+            TypeInfo::DynArray(_) => true,
+            TypeInfo::Func(_) => true, // Functions are pointer semantic
+        }
+    }
 
     pub fn new(ast_type: &AstType, type_ctx: &TypeContext) -> Self {
         match ast_type {

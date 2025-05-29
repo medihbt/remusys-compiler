@@ -1,4 +1,7 @@
-use std::{collections::HashMap, ops::{Deref, Range}};
+use std::{
+    collections::HashMap,
+    ops::{Deref, Range},
+};
 
 use remusys_ir::{
     ir::{
@@ -7,16 +10,14 @@ use remusys_ir::{
             data::ConstData as IRConstData,
             expr::{Array as IRArrayExpr, ConstExprData as IRExprData, ConstExprRef as IRExprRef},
         },
-        global::{GlobalRef as IRGlobalRef, Var as IRVariable},
+        global::GlobalRef as IRGlobalRef,
         module::Module as IRModule,
         util::builder::IRBuilder,
     },
     typing::id::ValTypeID as IRTypeID,
 };
 use remusys_lang::ast::expr::{
-    initlist::ArrayInitList,
-    Expr as AstExpr,
-    literal::Literal as AstLiteral,
+    Expr as AstExpr, initlist::ArrayInitList, literal::Literal as AstLiteral,
 };
 
 use super::TypeInfo;

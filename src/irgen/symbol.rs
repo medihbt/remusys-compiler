@@ -1,11 +1,21 @@
 //! Symbol mapping for the IR generation phase.
 
 use std::{
-    collections::HashMap, hash::{Hash, Hasher}, ops::Deref, rc::Rc
+    collections::HashMap,
+    hash::{Hash, Hasher},
+    ops::Deref,
+    rc::Rc,
 };
 
-use remusys_ir::ir::{global::{func, GlobalRef}, inst::InstRef, ValueSSA};
-use remusys_lang::ast::{expr::ident::Ident, stmt::decl::{Function, Variable}};
+use remusys_ir::ir::{
+    ValueSSA,
+    global::{GlobalRef, func},
+    inst::InstRef,
+};
+use remusys_lang::ast::{
+    expr::ident::Ident,
+    stmt::decl::{Function, Variable},
+};
 
 pub struct VariableSymbol(Rc<Variable>);
 impl Hash for VariableSymbol {
@@ -58,8 +68,8 @@ impl Clone for FuncSymbol {
 }
 
 pub struct SymbolMap {
-    pub variables: HashMap<VariableSymbol, InstRef>,
-    pub functions: HashMap<FuncSymbol,   GlobalRef>,
+    pub variables: HashMap<VariableSymbol, ValueSSA>,
+    pub functions: HashMap<FuncSymbol, GlobalRef>,
 }
 
 impl SymbolMap {
@@ -70,33 +80,36 @@ impl SymbolMap {
         }
     }
 
-    pub fn insert_variable(&mut self, var_symbol: VariableSymbol, inst_ref: InstRef) {
-        self.variables.insert(var_symbol, inst_ref);
+    pub fn insert_variable(&mut self, ast_var: Rc<Variable>, value_ref: ValueSSA) {
+        self.variables.insert(VariableSymbol(ast_var), value_ref);
     }
 
-    pub fn insert_function(&mut self, func_symbol: FuncSymbol, global_ref: GlobalRef) {
-        self.functions.insert(func_symbol, global_ref);
+    pub fn insert_function(&mut self, ast_func: Rc<Function>, global_ref: GlobalRef) {
+        self.functions.insert(FuncSymbol(ast_func), global_ref);
     }
 
-    pub fn get_variable(&self, var_symbol: &VariableSymbol) -> Option<&InstRef> {
-        self.variables.get(var_symbol)
+    pub fn get_variable(&self, var_symbol: &VariableSymbol) -> Option<ValueSSA> {
+        self.variables.get(var_symbol).cloned()
     }
 
-    pub fn get_function(&self, func_symbol: &FuncSymbol) -> Option<&GlobalRef> {
-        self.functions.get(func_symbol)
+    pub fn get_function(&self, func_symbol: &FuncSymbol) -> Option<GlobalRef> {
+        self.functions.get(func_symbol).cloned()
     }
 
     pub fn get_ident(&self, ident: &Ident) -> Option<ValueSSA> {
         match ident {
             Ident::Variable(weak) => {
                 let var_symbol = VariableSymbol(weak.upgrade().unwrap());
-                self.get_variable(&var_symbol).cloned().map(ValueSSA::Inst)
-            },
+                self.get_variable(&var_symbol)
+            }
             Ident::Func(weak) => {
                 let func_symbol = FuncSymbol(weak.upgrade().unwrap());
-                self.get_function(&func_symbol).cloned().map(ValueSSA::Global)
-            },
-            Ident::Unresolved(..) => panic!("Unresolved identifiers should not be queried in symbol map"),
+                self.get_function(&func_symbol)
+                    .map(ValueSSA::Global)
+            }
+            Ident::Unresolved(..) => {
+                panic!("Unresolved identifiers should not be queried in symbol map")
+            }
         }
     }
 }

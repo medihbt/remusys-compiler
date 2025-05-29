@@ -1,5 +1,5 @@
-use remusys_ir::{base::NullableValue, typing::context::TypeContext};
 use super::*;
+use remusys_ir::{base::NullableValue, typing::context::TypeContext};
 
 pub(super) struct ArrayInitState {
     /// `len()` 表示当前维度要解析的是哪个元素, `capacity()` 表示当前维度的表达式数量
@@ -155,7 +155,19 @@ impl<'a> ArrayInitStateStack<'a> {
         );
 
         match ast_exp {
-            AstExpr::None => IRConstData::Undef(type_req),
+            AstExpr::None => match type_req {
+                IRTypeID::Int(nbits) => IRConstData::Int(nbits, 0),
+                IRTypeID::Float(kind) => IRConstData::Float(kind, 0.0),
+
+                IRTypeID::Ptr
+                | IRTypeID::Array(_)
+                | IRTypeID::Struct(_)
+                | IRTypeID::StructAlias(_) => IRConstData::Zero(type_req),
+
+                IRTypeID::Void | IRTypeID::Func(_) => {
+                    panic!("Cannot create constant expression for un-instantiable type")
+                }
+            },
             AstExpr::Literal(AstLiteral::Int(i)) => match type_req {
                 IRTypeID::Int(nbits) => IRConstData::Int(nbits, *i as i128),
                 _ => panic!(
@@ -194,7 +206,10 @@ mod testing {
         let type_ctx = TypeContext::new_rc(PlatformPolicy::new_host());
         // Example: `let arr: [[i32; 3]; 2] = [[1, 2, 3], [4, 5, 6]]`
         let intty = AstType::Int;
-        let aint3ty = AstType::FixedArray(Rc::new(FixedArrayType { elemty: intty.clone(), nelems: 3 }));
+        let aint3ty = AstType::FixedArray(Rc::new(FixedArrayType {
+            elemty: intty.clone(),
+            nelems: 3,
+        }));
         let aaint32ty = AstType::FixedArray(Rc::new(FixedArrayType {
             elemty: aint3ty.clone(),
             nelems: 2,
@@ -211,7 +226,8 @@ mod testing {
                 AstExpr::Literal(AstLiteral::Int(4)),
                 AstExpr::Literal(AstLiteral::Int(5)),
                 AstExpr::Literal(AstLiteral::Int(6)),
-            ].into_boxed_slice(),
+            ]
+            .into_boxed_slice(),
             type_levels: vec![aaaint321ty, aaint32ty, aint3ty, intty].into_boxed_slice(),
             dimensions: vec![1, 2, 3, 1].into_boxed_slice(),
             n_final_elems: vec![6, 6, 3, 1].into_boxed_slice(),
