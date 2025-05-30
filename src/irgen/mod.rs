@@ -278,15 +278,13 @@ impl IRTranslator {
     fn translate_expr_force_const(&mut self, expr: &AstExpr, type_req: ValTypeID) -> ValueSSA {
         match expr {
             AstExpr::None => ValueSSA::ConstData(ConstData::Zero(type_req)),
-            AstExpr::Literal(Literal::Int(i)) => {
-                match type_req {
-                    ValTypeID::Int(1) => {
-                        ValueSSA::ConstData(ConstData::Int(1, if *i == 0 { 0 } else { 1 }))
-                    }
-                    ValTypeID::Int(bits) => ValueSSA::ConstData(ConstData::Int(bits, *i as i128)),
-                    _ => ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
+            AstExpr::Literal(Literal::Int(i)) => match type_req {
+                ValTypeID::Int(1) => {
+                    ValueSSA::ConstData(ConstData::Int(1, if *i == 0 { 0 } else { 1 }))
                 }
-            }
+                ValTypeID::Int(bits) => ValueSSA::ConstData(ConstData::Int(bits, *i as i128)),
+                _ => ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
+            },
             AstExpr::Literal(Literal::Float(f)) => {
                 ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64))
             }
@@ -533,29 +531,32 @@ impl IRTranslator {
                 let mut mlindex =
                     MultiLevelIndex::from_slice(&arr_list.dimensions[0..arr_list.n_dimensions()]);
                 for final_idx in 0..arr_list.final_elems.len() {
-                    let indices = mlindex
-                        .curr
-                        .iter()
-                        .map(|&i| ValueSSA::ConstData(ConstData::Int(32, i as i128)))
-                        .collect::<Vec<_>>();
-                    let gep = self
-                        .ir_builder
-                        .add_indexptr_inst(
-                            level0_ty,
-                            4,
-                            4,
-                            ValueSSA::Inst(alloca_inst),
-                            indices.iter().cloned(),
-                        )
-                        .unwrap();
                     let source = arr_list
                         .final_elems
                         .get(final_idx)
                         .expect("Array initializer should have enough elements");
                     let (source, _) = self.translate_alu_expr(func_stat, source);
-                    self.ir_builder
-                        .add_store_inst(ValueSSA::Inst(gep), source, 4)
-                        .expect("Failed to store array initializer value");
+
+                    if !matches!(&source, ValueSSA::None) {
+                        let indices = mlindex
+                            .curr
+                            .iter()
+                            .map(|&i| ValueSSA::ConstData(ConstData::Int(32, i as i128)))
+                            .collect::<Vec<_>>();
+                        let gep = self
+                            .ir_builder
+                            .add_indexptr_inst(
+                                level0_ty,
+                                4,
+                                4,
+                                ValueSSA::Inst(alloca_inst),
+                                indices.iter().cloned(),
+                            )
+                            .unwrap();
+                        self.ir_builder
+                            .add_store_inst(ValueSSA::Inst(gep), source, 4)
+                            .expect("Failed to store array initializer value");
+                    }
                     mlindex.inc_dim(0);
                 }
             }
