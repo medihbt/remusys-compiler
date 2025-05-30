@@ -1,17 +1,14 @@
-use std::{cell::Cell, collections::HashMap, hash::Hash, io::Write, ops::Deref, rc::Rc};
+use std::{collections::HashMap, hash::Hash, ops::Deref, rc::Rc};
 
 use remusys_ir::{
     base::NullableValue,
     ir::{
         ValueSSA,
-        block::{BlockData as IRBlockData, BlockRef as IRBlockRef},
+        block::BlockRef as IRBlockRef,
         cmp_cond::CmpCond,
-        constant::{
-            data::ConstData,
-            expr::{Array, ConstExprData},
-        },
-        global::{GlobalData, GlobalDataCommon, GlobalRef, Var, VarInner},
-        inst::{InstData, InstRef, binop::BinOp},
+        constant::data::ConstData,
+        global::GlobalRef,
+        inst::{InstData, InstRef},
         module::Module as IRModule,
         opcode::Opcode,
         util::builder::{IRBuilder, IRBuilderFocus},
@@ -29,7 +26,6 @@ use remusys_lang::{
             Expr as AstExpr,
             binop::BinExp,
             call::Call as AstCall,
-            ident::Ident,
             index::ArrayIndex,
             literal::Literal,
             unaryop::{ImplicitCast, UnaryExp},
@@ -39,13 +35,14 @@ use remusys_lang::{
             Stmt,
             block::Block as AstBlock,
             decl::{Function as AstFunc, VarDecl, Variable},
+            ifstmt::IfStmt,
             whilestmt::WhileStmt,
         },
     },
     typing::AstType,
     util::MultiLevelIndex,
 };
-use symbol::{SymbolMap, VariableSymbol};
+use symbol::SymbolMap;
 use typing::TypeInfo;
 
 pub mod expr;
@@ -75,13 +72,11 @@ impl Deref for WhileLoopRef {
 
 struct WhileLoopInfo {
     entry_block: IRBlockRef,
-    body_block: IRBlockRef,
     exit_block: IRBlockRef,
 }
 
 struct FunctionState {
     ir_func: GlobalRef,
-    entry_block: IRBlockRef,
     inst_before_last_alloca: InstRef,
     curr_block: IRBlockRef,
     while_loop_map: HashMap<WhileLoopRef, WhileLoopInfo>,
@@ -284,7 +279,16 @@ impl IRTranslator {
         match expr {
             AstExpr::None => ValueSSA::ConstData(ConstData::Zero(type_req)),
             AstExpr::Literal(Literal::Int(i)) => {
-                ValueSSA::ConstData(ConstData::Int(32, *i as i128))
+                match type_req {
+                    ValTypeID::Int(1) => {
+                        ValueSSA::ConstData(ConstData::Int(1, if *i == 0 { 0 } else { 1 }))
+                    }
+                    ValTypeID::Int(bits) => ValueSSA::ConstData(ConstData::Int(bits, *i as i128)),
+                    _ => ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
+                }
+            }
+            AstExpr::Literal(Literal::Float(f)) => {
+                ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64))
             }
             AstExpr::String(str) => {
                 let str_ref =
@@ -329,6 +333,7 @@ impl IRTranslator {
         func_ref: GlobalRef,
         body: &AstBlock,
     ) {
+        eprintln!("Translating function definition: {}", ast_func.name);
         let entry_block = self.ir_builder.get_focus_full().block;
         let inst_before_last_alloca = self
             .ir_builder
@@ -338,7 +343,6 @@ impl IRTranslator {
             .get();
         let mut func_stat = FunctionState {
             ir_func: func_ref,
-            entry_block,
             inst_before_last_alloca,
             curr_block: entry_block,
             while_loop_map: HashMap::new(),
@@ -353,7 +357,9 @@ impl IRTranslator {
         // Add the function header
         self.translate_funcdef_args(&mut func_stat, ast_func);
         // Translate the function body block
-        self.translate_block(&mut func_stat, body);
+        // Function body owns the whole basic block uniquely, so it is the end of
+        // statement list.
+        self.translate_block(&mut func_stat, body, true);
     }
 
     fn translate_funcdef_args(&mut self, func_stat: &mut FunctionState, ast_func: &AstFunc) {
@@ -387,23 +393,35 @@ impl IRTranslator {
         }
     }
 
-    fn translate_block(&mut self, func_stat: &mut FunctionState, ast_block: &AstBlock) {
+    fn translate_block(
+        &mut self,
+        func_stat: &mut FunctionState,
+        ast_block: &AstBlock,
+        is_block_end: bool, // if it is the end of its parent block
+    ) {
+        // 为了减少基本块拆分次数, AST 代码块通常不会单独 split 一块基本块出来处理.
+        // 如果自己不是父语句中所有基本块的末尾块, 那它的子语句没有一个是末尾语句;
+        // 否则就可以考虑末尾语句的问题了.
         for (idx, stmt) in ast_block.stmts.iter().enumerate() {
-            let is_block_end = idx == ast_block.stmts.len() - 1;
+            let is_block_end = if is_block_end {
+                idx == ast_block.stmts.len() - 1
+            } else {
+                false
+            };
             self.translate_stmt(func_stat, stmt, is_block_end);
         }
     }
 
     fn translate_stmt(&mut self, func_stat: &mut FunctionState, stmt: &Stmt, is_block_end: bool) {
         match stmt {
-            Stmt::Block(block) => self.translate_block(func_stat, &block),
+            Stmt::Block(block) => self.translate_block(func_stat, &block, is_block_end),
             Stmt::VarDecl(local) => {
                 for i in local.defs.iter() {
                     self.translate_local_var(func_stat, i);
                 }
             }
-            Stmt::If(if_stmt) => todo!(),
-            Stmt::While(while_stmt) => todo!(),
+            Stmt::If(if_stmt) => self.translate_if_stmt(func_stat, if_stmt),
+            Stmt::While(while_stmt) => self.translate_while_stmt(func_stat, while_stmt),
             Stmt::ExprStmt(expr) => {
                 self.translate_alu_expr(func_stat, &expr.expr.borrow());
             }
@@ -412,43 +430,34 @@ impl IRTranslator {
                     .while_loop_map
                     .get(&WhileLoopRef(loop_target.upgrade().unwrap()))
                     .unwrap();
-                self.ir_builder
-                    .focus_set_jump_to(loop_info.exit_block)
-                    .unwrap();
+                let exit_block = loop_info.exit_block;
+                let next_block = self.control_stmt_make_next(func_stat, is_block_end);
+                self.ir_builder.focus_set_jump_to(exit_block).unwrap();
+                if !is_block_end {
+                    self.set_focus_block(func_stat, next_block);
+                }
             }
             Stmt::ContinueTo(loop_target) => {
                 let loop_info = func_stat
                     .while_loop_map
                     .get(&WhileLoopRef(loop_target.upgrade().unwrap()))
                     .unwrap();
-                self.ir_builder
-                    .focus_set_jump_to(loop_info.entry_block)
-                    .unwrap();
+                let entry_block = loop_info.entry_block;
+                let next_block = self.control_stmt_make_next(func_stat, is_block_end);
+                self.ir_builder.focus_set_jump_to(entry_block).unwrap();
+                if !is_block_end {
+                    self.set_focus_block(func_stat, next_block);
+                }
             }
             Stmt::Return(expr) => {
                 let (retval, _) = self.translate_alu_expr(func_stat, expr);
-                let curr_block = func_stat.curr_block;
-                let (retval_block, new_focus) = if is_block_end {
-                    // If this is the last statement in the block, we can use the current block
-                    // as the return block.
-                    (curr_block, curr_block)
-                } else {
-                    // Otherwise, we need to create a new block for the return statement.
-                    let next_block = self
-                        .ir_builder
-                        .split_current_block_from_terminator()
-                        .unwrap();
-                    func_stat.curr_block = next_block;
-                    (curr_block, next_block)
-                };
-                self.ir_builder
-                    .set_focus(IRBuilderFocus::Block(retval_block));
-                // Add the return instruction
+                let next_block = self.control_stmt_make_next(func_stat, is_block_end);
                 self.ir_builder
                     .focus_set_return(retval)
                     .expect("Failed to set return value");
-                // Set the focus to the new block
-                self.ir_builder.set_focus(IRBuilderFocus::Block(new_focus));
+                if !is_block_end {
+                    self.set_focus_block(func_stat, next_block);
+                }
             }
 
             Stmt::FuncDecl(_) => {
@@ -465,6 +474,25 @@ impl IRTranslator {
             }
             Stmt::None => { /* Do nothing for empty statements */ }
         }
+    }
+
+    fn control_stmt_make_next(
+        &mut self,
+        func_stat: &mut FunctionState,
+        is_block_end: bool,
+    ) -> IRBlockRef {
+        let curr_block = func_stat.curr_block;
+        if is_block_end {
+            curr_block
+        } else {
+            self.ir_builder
+                .split_current_block_from_terminator()
+                .unwrap()
+        }
+    }
+    fn set_focus_block(&mut self, func_stat: &mut FunctionState, focus: IRBlockRef) {
+        self.ir_builder.set_focus(IRBuilderFocus::Block(focus));
+        func_stat.curr_block = focus;
     }
 
     fn translate_local_var(&mut self, func_stat: &mut FunctionState, var: &Rc<Variable>) {
@@ -754,11 +782,12 @@ impl IRTranslator {
     ) -> (ValueSSA, TypeInfo) {
         let (operand, operand_ty) = self.translate_alu_expr(func_stat, &unary_exp.expr);
 
-        let (is_float, operand_ty) = match operand_ty {
+        let (is_float, is_bool, operand_ty) = match operand_ty {
             TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)) => {
-                (true, ValTypeID::Float(FloatTypeKind::Ieee32))
+                (true, false, ValTypeID::Float(FloatTypeKind::Ieee32))
             }
-            TypeInfo::RValue(ValTypeID::Int(32)) => (false, ValTypeID::Int(32)),
+            TypeInfo::RValue(ValTypeID::Int(32)) => (false, false, ValTypeID::Int(32)),
+            TypeInfo::RValue(ValTypeID::Int(1)) => (false, true, ValTypeID::Int(1)),
             _ => panic!("Unsupported type for unary operation: {:?}", operand_ty),
         };
         match unary_exp.op {
@@ -778,7 +807,7 @@ impl IRTranslator {
             Operator::LogicalNot => {
                 let false_val = ConstData::make_int_valssa(1, 0);
                 let true_val = ConstData::make_int_valssa(1, 1);
-                if let ValTypeID::Int(1) = operand_ty {
+                if is_bool {
                     // Logical NOT for boolean values
                     let select_inst = self
                         .ir_builder
@@ -911,30 +940,228 @@ impl IRTranslator {
         };
         (ValueSSA::Inst(inst), ret_info)
     }
+
+    fn translate_if_stmt(&mut self, func_stat: &mut FunctionState, if_stmt: &IfStmt) {
+        let if_exit_block = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .expect("Failed to split current block for if statement");
+        if let Some(else_stmt) = &if_stmt.else_stmt {
+            let if_else_block = self
+                .ir_builder
+                .split_current_block_from_terminator()
+                .expect("Failed to split current block for if statement \"else\"");
+            let if_then_block = self
+                .ir_builder
+                .split_current_block_from_terminator()
+                .expect("Failed to split current block for if statement body");
+            let if_cond_block = self.ir_builder.get_focus_full().block;
+
+            self.ir_builder
+                .set_focus(IRBuilderFocus::Block(if_then_block));
+            self.ir_builder
+                .focus_set_jump_to(if_exit_block)
+                .expect("Failed to jump to 'if-exit'");
+            self.ir_builder
+                .set_focus(IRBuilderFocus::Block(if_cond_block));
+
+            self.translate_cond_exprs(func_stat, &if_stmt.cond, if_then_block, if_else_block);
+
+            self.set_focus_block(func_stat, if_then_block);
+            self.translate_stmt(func_stat, &if_stmt.then_stmt, true);
+
+            self.set_focus_block(func_stat, if_else_block);
+            self.translate_stmt(func_stat, else_stmt, true);
+        } else {
+            let if_then_block = self
+                .ir_builder
+                .split_current_block_from_terminator()
+                .expect("Failed to split current block for if statement body");
+
+            // current focus is `if condition block`
+            self.translate_cond_exprs(func_stat, &if_stmt.cond, if_then_block, if_exit_block);
+
+            self.set_focus_block(func_stat, if_then_block);
+            self.translate_stmt(func_stat, &if_stmt.then_stmt, true);
+        }
+        self.set_focus_block(func_stat, if_exit_block);
+    }
+
+    fn translate_while_stmt(&mut self, func_stat: &mut FunctionState, while_stmt: &Rc<WhileStmt>) {
+        let while_exit_block = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .expect("error in splitting while exit block");
+        let while_body_block = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .expect("error in splitting while body block");
+        let while_cond_block = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .expect("error in splitting while cond block");
+
+        func_stat.while_loop_map.insert(
+            WhileLoopRef(while_stmt.clone()),
+            WhileLoopInfo {
+                entry_block: while_cond_block,
+                exit_block: while_exit_block,
+            },
+        );
+
+        self.ir_builder
+            .set_focus(IRBuilderFocus::Block(while_body_block));
+        self.ir_builder
+            .focus_set_jump_to(while_cond_block)
+            .expect("error in setting while loop-back jumping");
+
+        self.set_focus_block(func_stat, while_cond_block);
+        self.translate_cond_exprs(
+            func_stat,
+            &while_stmt.cond,
+            while_body_block,
+            while_exit_block,
+        );
+        self.set_focus_block(func_stat, while_body_block);
+        self.translate_stmt(func_stat, &while_stmt.body.borrow(), true);
+        self.set_focus_block(func_stat, while_exit_block);
+    }
+
+    fn translate_cond_exprs(
+        &mut self,
+        func_stat: &mut FunctionState,
+        cond: &AstExpr,
+        if_true: IRBlockRef,
+        if_false: IRBlockRef,
+    ) {
+        if let AstExpr::ShortCircuit(logic) = cond {
+            self.translate_short_circuit(func_stat, logic, if_true, if_false);
+        } else {
+            let (cond_ir, cond_ty) = self.translate_alu_expr(func_stat, cond);
+            let cond_ir = match cond_ty {
+                TypeInfo::RValue(ValTypeID::Int(1)) => cond_ir,
+                TypeInfo::RValue(ValTypeID::Int(_)) => {
+                    // 因为 Remusys-SST 没有布尔常量, 正规化语法树时有可能会得到一个 int 常量.
+                    // 这里特殊处理之.
+                    if let ValueSSA::ConstData(ConstData::Int(_, n)) = cond_ir {
+                        ValueSSA::ConstData(ConstData::Int(1, if n == 0 { 0 } else { 1 }))
+                    } else {
+                        panic!("Expected a boolean condition, but got: {:?}", cond_ty);
+                    }
+                }
+                // if 表达式返回的如果不是布尔或者整数常量, 那就意味着正规化没做好.
+                _ => panic!(
+                    "Expected a boolean condition expression, but got: {:?}",
+                    cond_ty
+                ),
+            };
+            self.ir_builder
+                .focus_set_branch_to(cond_ir, if_true, if_false)
+                .expect("Error setting branch in control statements");
+        }
+    }
+    /// 短路表达式和其他表达式都不一样的是, 它们会造成控制流的变化。 其他表达式
+    /// 翻译成的指令都可以挤在一个基本块里, 而短路表达式需要分成两个基本块。
+    fn translate_short_circuit(
+        &mut self,
+        func_stat: &mut FunctionState,
+        logic: &BinExp,
+        if_true: IRBlockRef,
+        if_false: IRBlockRef,
+    ) {
+        let rhs_block = self
+            .ir_builder
+            .split_current_block_from_terminator()
+            .expect("Error splitting `rhs` block from short circuit");
+        match logic.op {
+            Operator::LogicalAnd => {
+                self.translate_cond_exprs(func_stat, &logic.lhs, rhs_block, if_false)
+            }
+            Operator::LogicalOr => {
+                self.translate_cond_exprs(func_stat, &logic.lhs, if_true, rhs_block)
+            }
+            _ => panic!("expected logical operator but got {:?}", logic.op),
+        }
+        self.set_focus_block(func_stat, rhs_block);
+        self.translate_cond_exprs(func_stat, &logic.rhs, if_true, if_false);
+    }
 }
 
 #[cfg(test)]
 mod testing {
+    use std::path::PathBuf;
+
     use remusys_ir::ir::util::writer::write_ir_module;
-    use remusys_lang::ast::print::AstPrinter;
+    use remusys_lang::{ast::print::AstPrinter, normalize::AstNormalizer, parser::parse_sysy_file};
 
     use super::*;
 
     #[test]
     fn test_translator() {
-        let ast_module = remusys_lang::parser::parse_sysy_file("target/main.sy");
-        let ast_module = remusys_lang::normalize::AstNormalizer::new(&ast_module).normalize();
-        let ast_module = Rc::new(ast_module);
+        let input_dir = "target/test-functional/sysy";
+        let sst_dir = "target/test-functional/sst";
+        let ir_dir = "target/test-functional/ir";
 
-        let ast_outfile = std::fs::File::create("target/main.ast").unwrap();
-        let mut writer = std::io::BufWriter::new(ast_outfile);
-        let mut ast_printer = AstPrinter::new(&ast_module, &mut writer);
-        ast_printer.print_module();
+        // if input directory does not exist, notify and return
+        if !PathBuf::from(input_dir).exists() {
+            println!("Input directory `{}` does not exist", input_dir);
+            return;
+        }
 
-        let translator = IRTranslator::new_competition(&ast_module);
-        let ir_module = translator.translate(&ast_module);
-        let out_file = std::fs::File::create("target/main.ir").unwrap();
-        let mut out_file = std::io::BufWriter::new(out_file);
-        write_ir_module(&ir_module, &mut out_file, false, false, false);
+        // create output directories if they do not exist
+        std::fs::create_dir_all(sst_dir).unwrap();
+        std::fs::create_dir_all(ir_dir).unwrap();
+
+        // Iterate over all files in the input directory
+        let test_thread = std::thread::Builder::new()
+            .name("IRTranslatorTest".to_string())
+            .stack_size(64 * 1024 * 1024) // 64 MB stack size
+            .spawn(move || {
+                let mut input_paths = Vec::new();
+                for entry in std::fs::read_dir(input_dir).unwrap() {
+                    let entry = entry.unwrap();
+                    let path = entry.path();
+                    if path.is_file() {
+                        if let Some(ext) = path.extension() {
+                            if ext == "sy" || ext == "sysy" {
+                                input_paths.push(path);
+                            }
+                        }
+                    }
+                }
+                input_paths.sort();
+                for input_path in input_paths {
+                    let input_path_str = input_path.to_str().unwrap();
+                    let file_name = input_path.file_stem().unwrap().to_str().unwrap();
+                    let ast_path = format!("{}/{}.sst", sst_dir, file_name);
+                    let ir_path = format!("{}/{}.ll", ir_dir, file_name);
+
+                    // Run the translator test
+                    thrd_test_translator(input_path_str, &ast_path, &ir_path);
+                }
+            })
+            .unwrap();
+        // Wait for the thread to finish
+        test_thread.join().unwrap();
+        println!("IR translation tests completed successfully.");
+    }
+
+    fn thrd_test_translator(input_path: &str, ast_path: &str, ir_path: &str) {
+        eprintln!("Translating: {}", input_path);
+        let ast_module = parse_sysy_file(input_path);
+        let sst_module = AstNormalizer::new(&ast_module).normalize();
+
+        eprintln!("Writing AST to: {}", ast_path);
+        let sst_file = std::fs::File::create(ast_path).unwrap();
+        let mut sst_writer = std::io::BufWriter::new(sst_file);
+        AstPrinter::new(&sst_module, &mut sst_writer).print_module();
+
+        eprintln!("Translating to IR: {}", ir_path);
+        let ir_module = IRTranslator::new_competition(&sst_module).translate(&sst_module);
+
+        eprintln!("Writing IR to: {}", ir_path);
+        let ir_file = std::fs::File::create(ir_path).unwrap();
+        let mut ir_writer = std::io::BufWriter::new(ir_file);
+        write_ir_module(&ir_module, &mut ir_writer, false, false, false);
     }
 }
