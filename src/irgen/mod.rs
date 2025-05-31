@@ -537,26 +537,24 @@ impl IRTranslator {
                         .expect("Array initializer should have enough elements");
                     let (source, _) = self.translate_alu_expr(func_stat, source);
 
-                    if !matches!(&source, ValueSSA::None) {
-                        let indices = mlindex
-                            .curr
-                            .iter()
-                            .map(|&i| ValueSSA::ConstData(ConstData::Int(32, i as i128)))
-                            .collect::<Vec<_>>();
-                        let gep = self
-                            .ir_builder
-                            .add_indexptr_inst(
-                                level0_ty,
-                                4,
-                                4,
-                                ValueSSA::Inst(alloca_inst),
-                                indices.iter().cloned(),
-                            )
-                            .unwrap();
-                        self.ir_builder
-                            .add_store_inst(ValueSSA::Inst(gep), source, 4)
-                            .expect("Failed to store array initializer value");
-                    }
+                    let indices = mlindex
+                        .curr
+                        .iter()
+                        .map(|&i| ValueSSA::ConstData(ConstData::Int(32, i as i128)))
+                        .collect::<Vec<_>>();
+                    let gep = self
+                        .ir_builder
+                        .add_indexptr_inst(
+                            level0_ty,
+                            4,
+                            4,
+                            ValueSSA::Inst(alloca_inst),
+                            indices.iter().cloned(),
+                        )
+                        .unwrap();
+                    self.ir_builder
+                        .add_store_inst(ValueSSA::Inst(gep), source, 4)
+                        .expect("Failed to store array initializer value");
                     mlindex.inc_dim(0);
                 }
             }
@@ -571,7 +569,13 @@ impl IRTranslator {
 
             _ => {
                 // Translate the initializer expression
-                let (initval, _) = self.translate_alu_expr(func_stat, &var.initval);
+                let (initval, initval_type_info) = self.translate_alu_expr(func_stat, &var.initval);
+                if !matches!(initval_type_info, TypeInfo::RValue(_)) {
+                    panic!(
+                        "Initializer expression for variable `{}` must be an rvalue, but got: {:?}",
+                        var.name, initval_type_info
+                    );
+                }
                 // Store the initial value into the alloca instruction
                 self.ir_builder
                     .add_store_inst(ValueSSA::Inst(alloca_inst), initval, 4)

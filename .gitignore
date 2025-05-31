@@ -1,1 +1,6 @@
 /target
+*.ast
+*.sst
+*.ll
+*.s
+*.o

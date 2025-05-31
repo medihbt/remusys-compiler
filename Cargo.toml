@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 remusys-lang = { path = "../remusys-lang" }
 remusys-ir = { path = "../remusys-ir" }
+clap = { version="4.5", features=["derive"] }
