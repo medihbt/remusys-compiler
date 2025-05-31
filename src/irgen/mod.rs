@@ -77,6 +77,7 @@ struct WhileLoopInfo {
 
 struct FunctionState {
     ir_func: GlobalRef,
+    func_name: String,
     inst_before_last_alloca: InstRef,
     curr_block: IRBlockRef,
     while_loop_map: HashMap<WhileLoopRef, WhileLoopInfo>,
@@ -173,7 +174,7 @@ impl IRTranslator {
     fn translate_global_def(&mut self, global_decl: &Stmt) {
         match global_decl {
             Stmt::VarDecl(var_decl) => {
-                self.translate_global_vardecl(var_decl);
+                self.translate_global_vardecl(var_decl, None);
             }
             Stmt::FuncDecl(ast_func) => self.translate_func_decl(ast_func),
             Stmt::UnresolvedVarDecl(_) => panic!(
@@ -182,9 +183,13 @@ impl IRTranslator {
             _ => panic!("Statement NOT a global declaration"),
         }
     }
-    fn translate_global_vardecl(&mut self, global_vars: &VarDecl) {
+    fn translate_global_vardecl(&mut self, global_vars: &VarDecl, in_function: Option<&str>) {
         for var in global_vars.defs.iter() {
-            let name = var.name.clone();
+            let name = if let Some(func_name) = in_function {
+                format!("_static.{}.{}", func_name, var.name)
+            } else {
+                var.name.clone()
+            };
             let var_typeinfo = TypeInfo::new(&var.var_type, &self.type_ctx);
             let var_content_ty = var_typeinfo
                 .get_alloca_data_type()
@@ -341,6 +346,7 @@ impl IRTranslator {
             .get();
         let mut func_stat = FunctionState {
             ir_func: func_ref,
+            func_name: ast_func.name.clone(),
             inst_before_last_alloca,
             curr_block: entry_block,
             while_loop_map: HashMap::new(),
@@ -414,8 +420,12 @@ impl IRTranslator {
         match stmt {
             Stmt::Block(block) => self.translate_block(func_stat, &block, is_block_end),
             Stmt::VarDecl(local) => {
-                for i in local.defs.iter() {
-                    self.translate_local_var(func_stat, i);
+                if local.is_const {
+                    self.translate_global_vardecl(&local, Some(func_stat.func_name.as_str()));
+                } else {
+                    for i in local.defs.iter() {
+                        self.translate_local_var(func_stat, i);
+                    }
                 }
             }
             Stmt::If(if_stmt) => self.translate_if_stmt(func_stat, if_stmt),
