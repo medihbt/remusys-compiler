@@ -3,7 +3,10 @@ use std::{path::Path, rc::Rc};
 pub mod irgen;
 use clap::Parser;
 use irgen::IRTranslator;
-use remusys_ir::ir::{module::Module, util::writer::write_ir_module};
+use remusys_ir::{
+    ir::{module::Module, util::writer::write_ir_module},
+    mir::{module::MirModule, translate::translate_ir_to_mir, util::asm_writer::AsmWriter},
+};
 use remusys_lang::{
     ast::{AstModule, print::AstPrinter},
     normalize::AstNormalizer,
@@ -152,7 +155,7 @@ enum TempData {
     Ast(AstModule),
     Sst(AstModule),
     IR(Rc<Module>),
-    Asm,
+    Asm(Rc<MirModule>, Rc<Module>),
     None,
 }
 
@@ -216,8 +219,24 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 write_ir_module(&ir_module, &mut ir_output, false, false, false);
                 TempData::IR(ir_module)
             }
-            ActionStep::Optimize => todo!("Optimization step not implemented yet"),
-            ActionStep::OutputAsm(_name) => todo!("Output assembly step not implemented yet"),
+            ActionStep::Optimize => {
+                eprintln!("Optimization step not implemented yet");
+                temp_data
+            }
+            ActionStep::OutputAsm(name) => {
+                let ir_module = match temp_data {
+                    TempData::IR(ir) => ir,
+                    _ => return Err("Expected IR data for assembly output".to_string()),
+                };
+                println!("Outputting assembly to {}", name);
+                let mir_module = translate_ir_to_mir(&ir_module);
+                let asm_output = std::fs::File::create(name)
+                    .map_err(|e| format!("Failed to create assembly output file: {}", e))?;
+                let mut asm_file_writer = std::io::BufWriter::new(asm_output);
+                let mut asm_writer = AsmWriter::new(&mut asm_file_writer);
+                asm_writer.write_module(&mir_module);
+                TempData::Asm(Rc::new(mir_module), ir_module)
+            }
         };
     }
     Ok(())

@@ -921,20 +921,16 @@ impl IRTranslator {
             ),
             Operator::BoolToInt => (
                 self.ir_builder
-                    .add_select_inst(
-                        operand,
-                        ConstData::make_int_valssa(32, 1),
-                        ConstData::make_int_valssa(32, 0),
-                    )
+                    .add_cast_inst(Opcode::Zext, ValTypeID::Int(32), operand)
                     .unwrap(),
                 TypeInfo::RValue(ValTypeID::Int(32)),
             ),
             Operator::BoolToFloat => (
                 self.ir_builder
-                    .add_select_inst(
+                    .add_cast_inst(
+                        Opcode::Uitofp,
+                        ValTypeID::Float(FloatTypeKind::Ieee32),
                         operand,
-                        ConstData::make_float_valssa(FloatTypeKind::Ieee32, 1.0),
-                        ConstData::make_float_valssa(FloatTypeKind::Ieee32, 0.0),
                     )
                     .unwrap(),
                 TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
