@@ -151,7 +151,7 @@ fn make_action_queue(cli: Cli) -> Vec<ActionStep> {
     step_queue
 }
 
-enum TempData {
+pub enum TempData {
     Ast(AstModule),
     Sst(AstModule),
     IR(Rc<Module>),
@@ -160,6 +160,8 @@ enum TempData {
 }
 
 fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
+
     let mut temp_data = TempData::None;
     for action in actions {
         temp_data = match action {
