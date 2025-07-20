@@ -1,11 +1,15 @@
-use std::{path::Path, rc::Rc};
+use std::{io::Write, path::Path, rc::Rc};
 
 pub mod irgen;
 use clap::Parser;
 use irgen::IRTranslator;
 use remusys_ir::{
     ir::{module::Module, util::writer::write_ir_module},
-    mir::{module::MirModule, translate::translate_ir_to_mir, util::asm_writer::AsmWriter},
+    mir::{
+        module::MirModule,
+        translate::translate_ir_to_mir,
+        util::{asm_writer::AsmWriter, mir_writer::FormatMir},
+    },
 };
 use remusys_lang::{
     ast::{AstModule, print::AstPrinter},
@@ -232,11 +236,17 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 };
                 println!("Outputting assembly to {}", name);
                 let mir_module = translate_ir_to_mir(&ir_module);
-                let asm_output = std::fs::File::create(name)
+
+                let asm_output = std::fs::File::create(&name)
                     .map_err(|e| format!("Failed to create assembly output file: {}", e))?;
                 let mut asm_file_writer = std::io::BufWriter::new(asm_output);
                 let mut asm_writer = AsmWriter::new(&mut asm_file_writer);
                 asm_writer.write_module(&mir_module);
+
+                let mir_output = std::fs::File::create(format!("{}.mir", name))
+                    .map_err(|e| format!("Failed to create MIR output file: {}", e))?;
+                let mut mir_file_writer = std::io::BufWriter::new(mir_output);
+                write!(mir_file_writer, "{:#?}", FormatMir(&mir_module)).unwrap();
                 TempData::Asm(Rc::new(mir_module), ir_module)
             }
         };
