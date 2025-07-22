@@ -1,11 +1,13 @@
 #!/bin/bash
 
 project_dir=$(git rev-parse --show-toplevel)
-sysy_base="$project_dir/target/test-functional"
+sysy_base="$project_dir/testing/test-functional"
 sysy_srcs="$sysy_base/sysy"
-ir_output="$sysy_base/ir"
-asm_output="$sysy_base/asm"
-log_output="$sysy_base/logs"
+
+output_base="$project_dir/target/test-functional"
+ir_output="$output_base/ir"
+asm_output="$output_base/asm"
+log_output="$output_base/logs"
 
 export RUST_BACKTRACE=1
 export RUST_LOG=debug
@@ -17,18 +19,18 @@ mkdir -p "$ir_output"
 mkdir -p "$asm_output"
 mkdir -p "$log_output"
 
-cargo build --release
-remusys_bin="$project_dir/target/release/remusys-compiler"
+# cargo build --release
+# remusys_bin="$project_dir/target/release/remusys-compiler"
 
-# cargo build
-# remusys_bin="$project_dir/target/debug/remusys-compiler"
+cargo build
+remusys_bin="$project_dir/target/debug/remusys-compiler"
 
 function process_one_source() {
     local src="$1"
     local asm_file="$asm_output/$(basename "$src" .sy).s"
     local ir_file="$(basename "$src" .sy).ll"
     local log_file="$log_output/$(basename "$src" .sy).log"
-    
+
     "$remusys_bin" "$src" --emit-ir -S -o "$asm_file" > "$log_file" 2>&1
 
     if [ $? -ne 0 ]; then
@@ -52,9 +54,11 @@ function process_one_source() {
     fi
 }
 
-for src in "$sysy_srcs"/*.sy; do
-    process_one_source "$src"
-done
+# for src in "$sysy_srcs"/*.sy; do
+#     process_one_source "$src"
+# done
+
+process_one_source "$sysy_srcs/96_matrix_add.sy"
 
 # 当命令行有选项 --asm 时，编译生成的汇编文件
 for params in "$@"; do
