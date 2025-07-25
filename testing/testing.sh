@@ -59,11 +59,11 @@ function process_one_source() {
     fi
 }
 
-for src in "$sysy_srcs"/*.sy; do
-    process_one_source "$src"
-done
+# for src in "$sysy_srcs"/*.sy; do
+#     process_one_source "$src"
+# done
 
-# process_one_source "$sysy_srcs/96_matrix_add.sy"
+process_one_source "$sysy_srcs/87_many_params.sy"
 
 # 当命令行有选项 --asm 时，编译生成的汇编文件
 for params in "$@"; do
@@ -108,9 +108,8 @@ for asm_file in "$asm_output"/*.s; do
     object_file="$asm_output/$asm_basename.o"
     # 使用 clang 汇编，添加更多 AArch64 特定选项
     clang --target=aarch64-unknown-linux-gnu \
-          -march=armv8-a \
           -c "$asm_file" \
-          -o "$object_file" || {
+          -o "$object_file" -fsanitize=address || {
         echo "Error compiling assembly file $asm_basename.s"
         exit 1
     }
@@ -120,10 +119,9 @@ for asm_file in "$asm_output"/*.s; do
     output_exe="$exe_output/$asm_basename.elf"
     # 链接为 AArch64 可执行文件，添加必要的链接选项
     clang --target=aarch64-unknown-linux-gnu \
-          -march=armv8-a \
           "$object_file" "$sylib_file" \
           -o "$output_exe" \
-          -static || {
+          -fsanitize=address || {
         echo "Error linking object file $asm_basename.o to executable $exe_name"
         exit 1
     }

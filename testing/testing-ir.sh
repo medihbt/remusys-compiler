@@ -81,7 +81,7 @@ for src in "$sysy_srcs"/*.sy; do
 
     # 然后把两个 .o 文件链接成一个可执行文件
     output_exe="$exe_output/$(basename "$src" .sy).elf"
-    clang --target=x86_64-pc-linux-gnu "$ir_output/${ir_file%.ll}.o" "$sylib_file" -o "$output_exe" || {
+    clang "$ir_output/${ir_file%.ll}.o" "$sylib_file" -o "$output_exe" || {
         echo "Failed to link object file for $(basename "$src"). Check log at $(basename "$log_file")"
         exit 1
     }
