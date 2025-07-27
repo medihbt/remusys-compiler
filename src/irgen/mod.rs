@@ -89,11 +89,17 @@ pub struct IRTranslator {
     pub symbols: SymbolMap,
     pub strings: HashMap<String, GlobalRef>,
     ast_intrinsic_funcs: AstIntrinsicFuncs,
+    ir_stdlib_funcs: IRStdLibFuncs,
 }
 
 struct AstIntrinsicFuncs {
     start_time: GlobalRef,
     stop_time: GlobalRef,
+}
+
+pub struct IRStdLibFuncs {
+    pub memset: GlobalRef,
+    pub memcpy: GlobalRef,
 }
 
 impl Default for AstIntrinsicFuncs {
@@ -120,6 +126,10 @@ impl IRTranslator {
             symbols,
             strings: HashMap::new(),
             ast_intrinsic_funcs: AstIntrinsicFuncs::default(),
+            ir_stdlib_funcs: IRStdLibFuncs {
+                memset: GlobalRef::new_null(),
+                memcpy: GlobalRef::new_null(),
+            },
         };
         ret.add_missing_timer_functions();
         ret
@@ -165,10 +175,50 @@ impl IRTranslator {
 
 impl IRTranslator {
     pub fn translate(mut self, ast_module: &AstModule) -> Rc<IRModule> {
+        // 添加标准库函数
+        self.add_ir_extra_stdlib();
+
         for gdef in ast_module.global_defs.iter() {
             self.translate_global_def(gdef);
         }
         self.ir_builder.module
+    }
+
+    /// 在 IR 层额外添加下面的标准库函数:
+    ///
+    /// * `memset`: `void memset(void *ptr, int value, int size);`
+    /// * `memcpy`: `void memcpy(void *dest, const void *src, int size);`
+    fn add_ir_extra_stdlib(&mut self) {
+        let memset_func = {
+            let memset_arg_ty = [
+                ValTypeID::Ptr,     // ptr
+                ValTypeID::Int(32), // value
+                ValTypeID::Int(32), // size
+            ];
+            let memset_func_ty =
+                self.type_ctx
+                    .make_func_type(&memset_arg_ty, ValTypeID::Void, false);
+            self.ir_builder
+                .declare_function("memset", memset_func_ty)
+                .expect("Failed to declare memset function")
+        };
+        let memcpy_func = {
+            let memcpy_arg_ty = [
+                ValTypeID::Ptr,     // dest
+                ValTypeID::Ptr,     // src
+                ValTypeID::Int(32), // size
+            ];
+            let memcpy_func_ty =
+                self.type_ctx
+                    .make_func_type(&memcpy_arg_ty, ValTypeID::Void, false);
+            self.ir_builder
+                .declare_function("memcpy", memcpy_func_ty)
+                .expect("Failed to declare memcpy function")
+        };
+        self.ir_stdlib_funcs = IRStdLibFuncs {
+            memset: memset_func,
+            memcpy: memcpy_func,
+        };
     }
 
     fn translate_global_def(&mut self, global_decl: &Stmt) {
@@ -537,6 +587,20 @@ impl IRTranslator {
                     _ => panic!("Expected a fixed array type for array initializer"),
                 };
                 let level0_ty = var_content_ty.get_element_type(&self.type_ctx);
+
+                if arr_list.is_zero_initializer() {
+                    // If the initializer is a zero initializer, we can use memset
+                    self.ir_builder.add_call_inst(
+                        self.ir_stdlib_funcs.memset,
+                        [
+                            ValueSSA::Inst(alloca_inst),
+                            ValueSSA::ConstData(ConstData::Int(32, 0)),
+                            ValueSSA::ConstData(ConstData::Int(32, arr_list.get_size_bytes() as i128)),
+                        ]
+                        .into_iter(),
+                    ).expect("Failed to call memset for zero initialization");
+                    return;
+                }
 
                 let mut mlindex =
                     MultiLevelIndex::from_slice(&arr_list.dimensions[0..arr_list.n_dimensions()]);

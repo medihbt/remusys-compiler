@@ -63,7 +63,7 @@ function process_one_source() {
 #     process_one_source "$src"
 # done
 
-process_one_source "$sysy_srcs/87_many_params.sy"
+process_one_source "$sysy_srcs/69_expr_eval.sy"
 
 # 当命令行有选项 --asm 时，编译生成的汇编文件
 for params in "$@"; do
