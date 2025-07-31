@@ -1,7 +1,7 @@
 use std::{collections::HashMap, hash::Hash, ops::Deref, rc::Rc};
 
 use remusys_ir::{
-    base::NullableValue,
+    base::INullableValue,
     ir::{
         ValueSSA,
         block::BlockRef as IRBlockRef,

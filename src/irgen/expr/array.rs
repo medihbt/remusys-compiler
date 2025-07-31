@@ -1,5 +1,5 @@
 use super::*;
-use remusys_ir::{base::NullableValue, typing::context::TypeContext};
+use remusys_ir::{base::INullableValue, typing::context::TypeContext};
 
 pub(super) struct ArrayInitState {
     /// `len()` 表示当前维度要解析的是哪个元素, `capacity()` 表示当前维度的表达式数量

@@ -13,7 +13,9 @@ log_output="$output_base/logs"
 exe_test_output="$output_base/exe-testout"
 
 export RUST_BACKTRACE=1
-# export RUST_LOG=debug
+export RUST_LOG=debug
+
+debug_build=0
 
 rm -rf "$ir_output" "$asm_output" "$log_output"
 
@@ -24,14 +26,23 @@ mkdir -p "$log_output"
 mkdir -p "$exe_output"
 mkdir -p "$exe_test_output"
 
-# cargo build --release
-# remusys_bin="$project_dir/target/release/remusys-compiler"
+function build_project() {
+    local debug_build="$1"
 
-cargo build || {
-    echo "Failed to build the project. Please check the errors above."
-    exit 1
+    if [ -z "$debug_build" ]; then
+        cargo build
+        remusys_bin="$project_dir/target/release/remusys-compiler" || {
+            echo "Failed to build the project in release mode. Please check the errors above."
+            exit 1
+        }
+    else
+        cargo build --release || {
+            echo "Failed to build the project. Please check the errors above."
+            exit 1
+        }
+        remusys_bin="$project_dir/target/debug/remusys-compiler"
+    fi
 }
-remusys_bin="$project_dir/target/debug/remusys-compiler"
 
 function process_one_source() {
     local src="$1"
@@ -62,19 +73,62 @@ function process_one_source() {
     fi
 }
 
-# for src in "$sysy_srcs"/*.sy; do
-#     process_one_source "$src"
-# done
-
-process_one_source "$sysy_srcs/55_sort_test1.sy"
-
-# 当命令行有选项 --asm 时，编译生成的汇编文件
-for params in "$@"; do
-    if [[ "$params" == "--asm" ]]; then
-        compile_asm=true
-        break
-    fi
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --asm)
+            compile_asm=1
+            shift
+            ;;
+        --debug)
+            debug_build=1
+            shift
+            ;;
+        --release)
+            debug_build=0
+            shift
+            ;;
+        --test-single)
+            if [[ -n "$2" ]]; then
+                build_one="$2"
+                shift 2
+            else
+                echo "Error: --test-single requires a filename argument"
+                exit 1
+            fi
+            ;;
+        --help|-h)
+            echo "Remusys Compiler Testing Script"
+            echo "Usage: $0 [options]"
+            echo "Options:"
+            echo "  --asm      Compile assembly files"
+            echo "  --debug    Build in debug mode"
+            echo "  --release  Build in release mode"
+            echo "  --test-single <file>  Test a single source file"
+            echo "  --help     Show this help message"
+            exit 0
+            ;;
+        --*)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+        *)
+            echo "Unknown argument: $1"
+            exit 1
+            ;;
+    esac
 done
+
+build_project "$debug_build"
+
+if [ -z "$build_one" ]; then
+    for src in "$sysy_srcs"/*.sy; do
+        process_one_source "$src"
+    done
+else
+    process_one_source "$sysy_srcs/$build_one.sy"
+fi
+
 
 if [ -z "$compile_asm" ]; then
     echo "Skipping assembly compilation. Use --asm to compile assembly files."
