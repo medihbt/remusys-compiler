@@ -13,7 +13,7 @@ log_output="$output_base/logs"
 exe_test_output="$output_base/exe-testout"
 
 export RUST_BACKTRACE=1
-export RUST_LOG=debug
+# export RUST_LOG=debug
 
 rm -rf "$ir_output" "$asm_output" "$log_output"
 
@@ -27,7 +27,10 @@ mkdir -p "$exe_test_output"
 # cargo build --release
 # remusys_bin="$project_dir/target/release/remusys-compiler"
 
-cargo build
+cargo build || {
+    echo "Failed to build the project. Please check the errors above."
+    exit 1
+}
 remusys_bin="$project_dir/target/debug/remusys-compiler"
 
 function process_one_source() {
@@ -42,14 +45,14 @@ function process_one_source() {
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
         echo "Compilation failed for $(basename "$src"). Check log at $(basename "$log_file")"
         echo "========== [ Log output ] =========="
-        cat "$log_file"
+        tail -n 30 "$log_file"
         echo "===================================="
         exit 1
     elif grep -q "panicked" "$log_file"; then
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
         echo "Compilation panicked for $(basename "$src"). Check log at $log_file"
         echo "========== [ Log output ] =========="
-        cat "$log_file"
+        tail -n 30 "$log_file"
         echo "===================================="
         echo "ended log output for $(basename "$src")"
         exit 1
@@ -63,7 +66,7 @@ function process_one_source() {
 #     process_one_source "$src"
 # done
 
-process_one_source "$sysy_srcs/69_expr_eval.sy"
+process_one_source "$sysy_srcs/55_sort_test1.sy"
 
 # 当命令行有选项 --asm 时，编译生成的汇编文件
 for params in "$@"; do
