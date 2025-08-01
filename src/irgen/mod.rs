@@ -114,10 +114,7 @@ impl Default for AstIntrinsicFuncs {
 impl IRTranslator {
     pub fn new(ast_module: &AstModule, platform_policy: PlatformPolicy) -> Self {
         let type_ctx = TypeContext::new_rc(platform_policy);
-        let ir_builder = IRBuilder::new(Rc::new(IRModule::new(
-            ast_module.file.clone(),
-            type_ctx.clone(),
-        )));
+        let ir_builder = IRBuilder::new(IRModule::new(ast_module.file.clone(), type_ctx.clone()));
         let symbols = SymbolMap::new();
 
         let mut ret = Self {
@@ -167,10 +164,6 @@ impl IRTranslator {
         self.ast_intrinsic_funcs.start_time = starttime_func;
         self.ast_intrinsic_funcs.stop_time = stop_time_func;
     }
-
-    fn get_module(&self) -> Rc<IRModule> {
-        self.ir_builder.module.clone()
-    }
 }
 
 impl IRTranslator {
@@ -181,7 +174,7 @@ impl IRTranslator {
         for gdef in ast_module.global_defs.iter() {
             self.translate_global_def(gdef);
         }
-        self.ir_builder.module
+        Rc::new(self.ir_builder.module)
     }
 
     /// 在 IR 层额外添加下面的标准库函数:
@@ -590,15 +583,20 @@ impl IRTranslator {
 
                 if arr_list.is_zero_initializer() {
                     // If the initializer is a zero initializer, we can use memset
-                    self.ir_builder.add_call_inst(
-                        self.ir_stdlib_funcs.memset,
-                        [
-                            ValueSSA::Inst(alloca_inst),
-                            ValueSSA::ConstData(ConstData::Int(32, 0)),
-                            ValueSSA::ConstData(ConstData::Int(32, arr_list.get_size_bytes() as i128)),
-                        ]
-                        .into_iter(),
-                    ).expect("Failed to call memset for zero initialization");
+                    self.ir_builder
+                        .add_call_inst(
+                            self.ir_stdlib_funcs.memset,
+                            [
+                                ValueSSA::Inst(alloca_inst),
+                                ValueSSA::ConstData(ConstData::Int(32, 0)),
+                                ValueSSA::ConstData(ConstData::Int(
+                                    32,
+                                    arr_list.get_size_bytes() as i128,
+                                )),
+                            ]
+                            .into_iter(),
+                        )
+                        .expect("Failed to call memset for zero initialization");
                     return;
                 }
 
@@ -764,7 +762,7 @@ impl IRTranslator {
             .ir_builder
             .add_indexptr_inst(level0_ty, 4, 4, array, indices.iter().cloned())
             .unwrap();
-        let elemty = match &*self.get_module().get_inst(gep) {
+        let elemty = match &*self.ir_builder.module.get_inst(gep) {
             InstData::IndexPtr(_, gep) => gep.ret_pointee_ty,
             _ => panic!("Expected an index pointer instruction, but got: {:?}", gep),
         };

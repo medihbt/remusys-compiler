@@ -29,7 +29,7 @@ pub(super) fn translate_string_literal(
     str_map: &mut HashMap<String, IRGlobalRef>,
     literal: &str,
 ) -> IRGlobalRef {
-    let module = builder.module.deref();
+    let module = &builder.module;
     if let Some(global_ref) = str_map.get(literal) {
         return global_ref.clone();
     }

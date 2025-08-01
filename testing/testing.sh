@@ -30,17 +30,17 @@ function build_project() {
     local debug_build="$1"
 
     if [ -z "$debug_build" ]; then
-        cargo build
-        remusys_bin="$project_dir/target/release/remusys-compiler" || {
-            echo "Failed to build the project in release mode. Please check the errors above."
-            exit 1
-        }
-    else
-        cargo build --release || {
+        cargo build || {
             echo "Failed to build the project. Please check the errors above."
             exit 1
         }
         remusys_bin="$project_dir/target/debug/remusys-compiler"
+    else
+        cargo build --release || {
+            echo "Failed to build the project in release mode. Please check the errors above."
+            exit 1
+        }
+        remusys_bin="$project_dir/target/release/remusys-compiler"
     fi
 }
 
