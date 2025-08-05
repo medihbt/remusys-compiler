@@ -39,11 +39,16 @@ struct Cli {
     #[arg(short('S'), long)]
     emit_asm: bool,
 
-    #[arg(short = 'O', long = "optimize", action = clap::ArgAction::Count)]
-    optimization_level: u8,
+    /// 优化级别 (支持 -O, -O0, -O1, -O2, -O3)
+    #[arg(short('O'), action = clap::ArgAction::Append, value_name = "LEVEL", num_args = 0..=1)]
+    optimization_level: Vec<String>,
 
     #[arg(short, long)]
     output_file: Option<String>,
+
+    /// 是否输出 MIR
+    #[arg(long)]
+    emit_mir: bool,
 }
 
 #[derive(Debug)]
@@ -55,10 +60,14 @@ enum ActionStep {
     Translate,
     OutputIr(String),
     Optimize,
-    OutputAsm(String),
+    /// 第二个参数表示是否输出 MIR
+    OutputAsm(String, bool),
 }
 
 fn main() {
+    // 先初始化日志系统
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("error")).init();
+
     let cli = Cli::parse();
 
     let step_queue = make_action_queue(cli);
@@ -82,7 +91,17 @@ fn make_action_queue(cli: Cli) -> Vec<ActionStep> {
     let emit_sst = cli.emit_sst;
     let emit_ir = cli.emit_ir;
     let emit_asm = cli.emit_asm;
-    let should_optimize = cli.optimization_level > 0;
+    let should_optimize = if cli.optimization_level.is_empty() {
+        false
+    } else {
+        // 如果有 -O 参数，检查最后一个值
+        match cli.optimization_level.last().map(|s| s.as_str()) {
+            Some("0") | Some("") => false,
+            Some("1") | Some("2") | Some("3") => true,
+            None => true, // 单独的 -O 等同于 -O1
+            _ => false,
+        }
+    };
     let custom_output = cli.output_file.is_some();
 
     let do_until_parse = !emit_sst && !emit_ir && !emit_asm;
@@ -150,7 +169,7 @@ fn make_action_queue(cli: Cli) -> Vec<ActionStep> {
         } else {
             format!("{}.s", input_basename)
         };
-        step_queue.push(ActionStep::OutputAsm(asm_output));
+        step_queue.push(ActionStep::OutputAsm(asm_output, cli.emit_mir));
     }
     step_queue
 }
@@ -164,8 +183,6 @@ pub enum TempData {
 }
 
 fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("debug")).init();
-
     let mut temp_data = TempData::None;
     for action in actions {
         temp_data = match action {
@@ -229,7 +246,7 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 eprintln!("Optimization step not implemented yet");
                 temp_data
             }
-            ActionStep::OutputAsm(name) => {
+            ActionStep::OutputAsm(name, emit_mir) => {
                 let ir_module = match temp_data {
                     TempData::IR(ir) => ir,
                     _ => return Err("Expected IR data for assembly output".to_string()),
@@ -242,12 +259,13 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 let mut asm_file_writer = std::io::BufWriter::new(asm_output);
                 let mut asm_writer = AsmWriter::new(&mut asm_file_writer);
                 asm_writer.write_module(&mir_module);
-
-                let mir_output = std::fs::File::create(format!("{}.mir", name))
-                    .map_err(|e| format!("Failed to create MIR output file: {}", e))?;
-                let mut mir_output_writer = std::io::BufWriter::new(mir_output);
-                write!(mir_output_writer, "{:#?}", FormatMir(&mir_module))
-                    .map_err(|e| format!("Failed to write MIR output: {}", e))?;
+                if emit_mir {
+                    let mir_output = std::fs::File::create(format!("{}.mir", name))
+                        .map_err(|e| format!("Failed to create MIR output file: {}", e))?;
+                    let mut mir_output_writer = std::io::BufWriter::new(mir_output);
+                    write!(mir_output_writer, "{:#?}", FormatMir(&mir_module))
+                        .map_err(|e| format!("Failed to write MIR output: {}", e))?;
+                }
                 TempData::Asm(Rc::new(mir_module), ir_module)
             }
         };

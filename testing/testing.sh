@@ -13,7 +13,6 @@ log_output="$output_base/logs"
 exe_test_output="$output_base/exe-testout"
 
 export RUST_BACKTRACE=1
-export RUST_LOG=debug
 
 debug_build=0
 
@@ -34,43 +33,75 @@ function build_project() {
             echo "Failed to build the project. Please check the errors above."
             exit 1
         }
-        remusys_bin="$project_dir/target/debug/remusys-compiler"
+        remusys_bin="$project_dir/target/debug/compiler"
     else
         cargo build --release || {
             echo "Failed to build the project in release mode. Please check the errors above."
             exit 1
         }
-        remusys_bin="$project_dir/target/release/remusys-compiler"
+        remusys_bin="$project_dir/target/release/compiler"
     fi
 }
 
 function process_one_source() {
     local src="$1"
-    local asm_file="$asm_output/$(basename "$src" .sy).s"
+    local src_basename=$(basename "$src" .sy)
+    local asm_file="$asm_output/$src_basename.s"
     local ir_file="$(basename "$src" .sy).ll"
-    local log_file="$log_output/$(basename "$src" .sy).log"
+    local log_file="$log_output/$src_basename.log"
 
     "$remusys_bin" "$src" --emit-ir -S -o "$asm_file" > "$log_file" 2>&1
 
     if [ $? -ne 0 ]; then
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
-        echo "Compilation failed for $(basename "$src"). Check log at $(basename "$log_file")"
+        echo "Compilation failed for $src_basename. Check log at $(basename "$log_file")"
         echo "========== [ Log output ] =========="
         tail -n 30 "$log_file"
         echo "===================================="
         exit 1
     elif grep -q "panicked" "$log_file"; then
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
-        echo "Compilation panicked for $(basename "$src"). Check log at $log_file"
+        echo "Compilation panicked for $src_basename. Check log at $log_file"
         echo "========== [ Log output ] =========="
         tail -n 30 "$log_file"
         echo "===================================="
-        echo "ended log output for $(basename "$src")"
+        echo "ended log output for $src_basename"
         exit 1
     else
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
         echo "Compiled $(basename "$src") successfully to $(basename "$asm_file")".
     fi
+
+    echo "Testing IR file correctness for $ir_file"
+    if ! grep -q "define" "$ir_output/$ir_file"; then
+        echo "Error: IR file $ir_file does not contain a 'define' statement."
+        exit 1
+    fi
+
+    local sylib_dir="$sysy_base/sylib"
+    local exe_test_input="$sysy_base/in"
+    local exe_file="$exe_output/$src_basename.elf"
+
+    clang "$ir_output/$ir_file" "$sylib_dir/sylib.c" -o "$exe_file" || {
+        echo "Error compiling IR file $ir_file with sylib.c"
+        exit 1
+    }
+    echo "Compiled IR file $ir_file with sylib.c to executable $src_basename.elf. Now running the executable."
+
+    local test_input="$exe_test_input/$src_basename.in"
+    local test_output="$exe_test_output/$src_basename.out"
+    if [ -f "$test_input" ]; then
+        echo "Running $src_basename with input from $test_input"
+        "$exe_file" < "$test_input" > "$test_output" 2>&1
+        exit_code=$?
+    else
+        echo "No input file $test_input for $src_basename, running without input"
+        "$exe_file" > "$test_output" 2>&1
+        exit_code=$?
+    fi
+
+    echo "$exit_code" >> "$test_output"
+    echo "Execution of $exe_file completed with exit code $exit_code. Output saved to $test_output"
 }
 
 # Parse command line arguments
@@ -119,6 +150,21 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+function prepare_sylib() {
+    sylib_src="$sysy_base/sylib"
+    sylib_output="$output_base/sylib"
+    rm -rf "$sylib_output"
+    mkdir -p "$sylib_output"
+    clang -c "$sylib_src/sylib.c" -o "$sylib_output/sylib.o" -O2 || {
+        echo "Failed to compile sylib.c"
+        exit 1
+    }
+    echo "Compiled sylib.c successfully to $sylib_output/sylib.o"
+
+    sylib_file="$sylib_output/sylib.o"
+}
+
+prepare_sylib
 build_project "$debug_build"
 
 if [ -z "$build_one" ]; then
@@ -134,22 +180,6 @@ if [ -z "$compile_asm" ]; then
     echo "Skipping assembly compilation. Use --asm to compile assembly files."
     exit 0
 fi
-
-function prepare_sylib() {
-    sylib_src="$sysy_base/sylib"
-    sylib_output="$output_base/sylib"
-    rm -rf "$sylib_output"
-    mkdir -p "$sylib_output"
-    clang --target=aarch64-unknown-linux-gnu -c "$sylib_src/sylib.c" -o "$sylib_output/sylib.o" -O2 || {
-        echo "Failed to compile sylib.c"
-        exit 1
-    }
-    echo "Compiled sylib.c successfully to $sylib_output/sylib.o"
-
-    sylib_file="$sylib_output/sylib.o"
-}
-
-prepare_sylib
 
 for asm_file in "$asm_output"/*.s; do
     if ! [ -f "$asm_file" ]; then
