@@ -8,7 +8,7 @@ use std::{
 };
 
 use remusys_ir::{
-    ir::{ValueSSA, global::GlobalRef},
+    ir::{ValueSSA, GlobalRef},
     typing::types::FuncTypeRef,
 };
 use remusys_lang::ast::{

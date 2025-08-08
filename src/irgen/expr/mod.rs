@@ -4,17 +4,11 @@ use std::{
 };
 
 use remusys_ir::{
-    ir::{
+    base::APInt, ir::{
+        Array as IRArrayExpr, ConstData as IRConstData, ConstExprData as IRExprData,
+        ConstExprRef as IRExprRef, GlobalRef as IRGlobalRef, IRBuilder, Module as IRModule,
         ValueSSA as IRValue,
-        constant::{
-            data::ConstData as IRConstData,
-            expr::{Array as IRArrayExpr, ConstExprData as IRExprData, ConstExprRef as IRExprRef},
-        },
-        global::GlobalRef as IRGlobalRef,
-        module::Module as IRModule,
-        util::builder::IRBuilder,
-    },
-    typing::id::ValTypeID as IRTypeID,
+    }, typing::id::ValTypeID as IRTypeID
 };
 use remusys_lang::ast::expr::{
     Expr as AstExpr, initlist::ArrayInitList, literal::Literal as AstLiteral,
@@ -29,7 +23,7 @@ pub(super) fn translate_string_literal(
     str_map: &mut HashMap<String, IRGlobalRef>,
     literal: &str,
 ) -> IRGlobalRef {
-    let module = &builder.module;
+    let module = &mut builder.module;
     if let Some(global_ref) = str_map.get(literal) {
         return global_ref.clone();
     }
@@ -39,17 +33,17 @@ pub(super) fn translate_string_literal(
         literal.len() + 1, // +1 for null terminator
         IRTypeID::Int(8),  // char type
     );
-    let str_initval = IRExprData::Array(IRArrayExpr {
-        arrty: str_arrty.clone(),
-        elems: literal
-            .bytes()
-            .map(|b| IRValue::ConstData(IRConstData::Int(8, b as i128)))
-            .chain(std::iter::once(IRValue::ConstData(IRConstData::Int(
-                8, 0, // null terminator
-            ))))
-            .collect(),
-    });
-    let str_initval = module.insert_expr(str_initval);
+    let str_initval = {
+        let mut elems = Vec::with_capacity(literal.len() + 1);
+        for b in literal.bytes() {
+            elems.push(APInt::from(b).into());
+        }
+        elems.push(APInt::from(0u8).into()); // null terminator
+        let str_initval = IRArrayExpr::from_vec(str_arrty, elems);
+
+        let alloc = &mut module.allocs_mut().exprs;
+        IRExprRef::from_alloc(alloc, IRExprData::Array(str_initval))
+    };
     let str_var = builder
         .define_var(
             &str_name,
