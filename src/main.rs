@@ -1,7 +1,7 @@
 use clap::Parser;
 use irgen::IRTranslator;
 use remusys_ir::{
-    ir::{module::Module, util::writer::write_ir_module},
+    ir::{Module, write_ir_module},
     mir::{
         module::MirModule,
         translate::translate_ir_to_mir,
@@ -239,7 +239,7 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 let ir_output = std::fs::File::create(ir_output)
                     .map_err(|e| format!("Failed to create IR output file: {}", e))?;
                 let mut ir_output = std::io::BufWriter::new(ir_output);
-                write_ir_module(&ir_module, &mut ir_output, false, false, false);
+                write_ir_module(&ir_module, &mut ir_output);
                 TempData::IR(ir_module)
             }
             ActionStep::Optimize => {

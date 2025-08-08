@@ -23,10 +23,10 @@ mkdir -p "$exe_output"
 mkdir -p "$exe_test_output"
 
 cargo build --release
-remusys_bin="$project_dir/target/release/remusys-compiler"
+remusys_bin="$project_dir/target/release/compiler"
 
 # cargo build
-# remusys_bin="$project_dir/target/debug/remusys-compiler"
+# remusys_bin="$project_dir/target/debug/compiler"
 
 function prepare_sylib() {
     sylib_src="$sysy_base/sylib"

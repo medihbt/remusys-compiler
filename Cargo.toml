@@ -9,7 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 remusys-lang = { path = "remusys-lang" }
-remusys-ir = { path = "remusys-ir" }
+remusys-ir = { path = "/home/medihbt/Devel/Projects/remusys-remake/remusys-ir" }
 clap = { version="4.5", features=["derive"] }
 log = "0.4.27"
 env_logger = "0.11.8"

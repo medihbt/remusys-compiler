@@ -1,5 +1,8 @@
 use super::*;
-use remusys_ir::{base::INullableValue, typing::context::TypeContext};
+use remusys_ir::{
+    base::{APInt, INullableValue},
+    typing::context::TypeContext,
+};
 
 pub(super) struct ArrayInitState {
     /// `len()` 表示当前维度要解析的是哪个元素, `capacity()` 表示当前维度的表达式数量
@@ -100,18 +103,14 @@ impl<'a> ArrayInitStateStack<'a> {
                     let ir_const = Self::ast_data_make_const(ast_exp, elem_type.clone());
                     ir_building.push(IRValue::ConstData(ir_const));
                 }
-                let ir_expr_data = IRExprData::Array(IRArrayExpr {
-                    arrty: this_level_type,
-                    elems: ir_building,
-                });
-                module.insert_expr(ir_expr_data)
+                let ir_expr_data =
+                    IRExprData::Array(IRArrayExpr::from_vec(this_level_type, ir_building));
+                IRExprRef::from_alloc(&mut module.borrow_allocs_mut().exprs, ir_expr_data)
             } else if this_level_build_idx == this_level_dimension {
                 // 当前层级的数组表达式已经构建完毕, 需要将其转换为 IR 表达式
-                let ir_expr_data = IRExprData::Array(IRArrayExpr {
-                    arrty: this_level_type,
-                    elems: ir_building,
-                });
-                module.insert_expr(ir_expr_data)
+                let ir_expr_data =
+                    IRExprData::Array(IRArrayExpr::from_vec(this_level_type, ir_building));
+                IRExprRef::from_alloc(&mut module.borrow_allocs_mut().exprs, ir_expr_data)
             } else if this_level_build_idx < this_level_dimension {
                 // 当前层级的数组表达式还未构建完毕, 需要继续处理下一层级
                 let child_layer = ast_layer + 1;
@@ -169,7 +168,7 @@ impl<'a> ArrayInitStateStack<'a> {
                 }
             },
             AstExpr::Literal(AstLiteral::Int(i)) => match type_req {
-                IRTypeID::Int(nbits) => IRConstData::Int(nbits, *i as i128),
+                IRTypeID::Int(nbits) => APInt::new(*i, nbits).into(),
                 _ => panic!(
                     "Expected an integer type for constant expression, got: {:?}",
                     type_req
@@ -196,7 +195,10 @@ impl<'a> ArrayInitStateStack<'a> {
 mod testing {
     use std::rc::Rc;
 
-    use remusys_ir::{ir::util::writer::write_ir_expr, typing::context::PlatformPolicy};
+    use remusys_ir::{
+        ir::{ConstExprRef, IRWriter, ISubValueSSA},
+        typing::context::PlatformPolicy,
+    };
     use remusys_lang::typing::{AstType, FixedArrayType};
 
     use super::*;
@@ -235,5 +237,10 @@ mod testing {
         let module = IRModule::new("test".to_string(), type_ctx);
         let expr_ref = translate_array_init_list_const(&module, &arrexp);
         write_ir_expr(&module, &mut std::io::stdout(), expr_ref);
+    }
+
+    fn write_ir_expr(module: &IRModule, out: &mut dyn std::io::Write, expr_ref: ConstExprRef) {
+        let writer = IRWriter::from_module(out, module);
+        expr_ref.fmt_ir(&writer).unwrap();
     }
 }

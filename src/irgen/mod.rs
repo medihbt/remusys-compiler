@@ -1,17 +1,11 @@
 use std::{collections::HashMap, hash::Hash, ops::Deref, rc::Rc};
 
 use remusys_ir::{
-    base::INullableValue,
+    base::{APInt, INullableValue, SlabRef},
     ir::{
-        ValueSSA,
-        block::BlockRef as IRBlockRef,
-        cmp_cond::CmpCond,
-        constant::data::ConstData,
-        global::GlobalRef,
+        BlockRef as IRBlockRef, CmpCond, ConstData, GlobalRef, IRBuilder, IRBuilderFocus,
+        ISubValueSSA, Module as IRModule, Opcode, ValueSSA,
         inst::{InstData, InstRef},
-        module::Module as IRModule,
-        opcode::Opcode,
-        util::builder::{IRBuilder, IRBuilderFocus},
     },
     typing::{
         context::{PlatformPolicy, TypeContext},
@@ -330,8 +324,11 @@ impl IRTranslator {
                 ValTypeID::Int(1) => {
                     ValueSSA::ConstData(ConstData::Int(1, if *i == 0 { 0 } else { 1 }))
                 }
-                ValTypeID::Int(bits) => ValueSSA::ConstData(ConstData::Int(bits, *i as i128)),
-                _ => ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
+                ValTypeID::Int(bits) => {
+                    let value = APInt::new(*i, bits);
+                    value.into()
+                }
+                _ => APInt::from(*i).into(),
             },
             AstExpr::Literal(Literal::Float(f)) => {
                 ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64))
@@ -381,12 +378,9 @@ impl IRTranslator {
     ) {
         eprintln!("Translating function definition: {}", ast_func.name);
         let entry_block = self.ir_builder.get_focus_full().block;
-        let inst_before_last_alloca = self
-            .ir_builder
-            .module
-            .get_block(entry_block)
-            .phi_node_end
-            .get();
+        let inst_before_last_alloca = entry_block
+            .to_data(&self.ir_builder.module.borrow_allocs().blocks)
+            .phi_end;
         let mut func_stat = FunctionState {
             ir_func: func_ref,
             func_name: ast_func.name.clone(),
@@ -588,13 +582,10 @@ impl IRTranslator {
                             self.ir_stdlib_funcs.memset,
                             [
                                 ValueSSA::Inst(alloca_inst),
-                                ValueSSA::ConstData(ConstData::Int(32, 0)),
-                                ValueSSA::ConstData(ConstData::Int(
-                                    32,
-                                    arr_list.get_size_bytes() as i128,
-                                )),
+                                APInt::from(0u32).into(),
+                                APInt::from(arr_list.get_size_bytes()).into(),
                             ]
-                            .into_iter(),
+                            .iter(),
                         )
                         .expect("Failed to call memset for zero initialization");
                     return;
@@ -609,20 +600,14 @@ impl IRTranslator {
                         .expect("Array initializer should have enough elements");
                     let (source, _) = self.translate_alu_expr(func_stat, source);
 
-                    let indices = mlindex
+                    let indices: Vec<ValueSSA> = mlindex
                         .curr
                         .iter()
-                        .map(|&i| ValueSSA::ConstData(ConstData::Int(32, i as i128)))
-                        .collect::<Vec<_>>();
+                        .map(|&i| APInt::from(i).into())
+                        .collect();
                     let gep = self
                         .ir_builder
-                        .add_indexptr_inst(
-                            level0_ty,
-                            4,
-                            4,
-                            ValueSSA::Inst(alloca_inst),
-                            indices.iter().cloned(),
-                        )
+                        .add_indexptr_inst(level0_ty, 4, 4, ValueSSA::Inst(alloca_inst), &indices)
                         .unwrap();
                     self.ir_builder
                         .add_store_inst(ValueSSA::Inst(gep), source, 4)
@@ -666,10 +651,9 @@ impl IRTranslator {
     ) -> (ValueSSA, TypeInfo) {
         match expr {
             AstExpr::None => (ValueSSA::None, TypeInfo::RValue(ValTypeID::Void)),
-            AstExpr::Literal(Literal::Int(i)) => (
-                ValueSSA::ConstData(ConstData::Int(32, *i as i128)),
-                TypeInfo::RValue(ValTypeID::Int(32)),
-            ),
+            AstExpr::Literal(Literal::Int(i)) => {
+                (APInt::from(*i).into(), TypeInfo::RValue(ValTypeID::Int(32)))
+            }
             AstExpr::Literal(Literal::Float(f)) => (
                 ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64)),
                 TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
@@ -708,24 +692,18 @@ impl IRTranslator {
             }
 
             AstExpr::IntrinsicTimeStart(lineno) => {
-                let lineno_value = ValueSSA::ConstData(ConstData::Int(32, *lineno as i128));
+                let lineno_value = APInt::from(*lineno).into();
                 let call_inst = self
                     .ir_builder
-                    .add_call_inst(
-                        self.ast_intrinsic_funcs.start_time,
-                        [lineno_value].into_iter(),
-                    )
+                    .add_call_inst(self.ast_intrinsic_funcs.start_time, [lineno_value].iter())
                     .unwrap();
                 (ValueSSA::Inst(call_inst), TypeInfo::RValue(ValTypeID::Void))
             }
             AstExpr::IntrinsicTimeEnd(lineno) => {
-                let lineno_value = ValueSSA::ConstData(ConstData::Int(32, *lineno as i128));
+                let lineno_value = APInt::from(*lineno).into();
                 let call_inst = self
                     .ir_builder
-                    .add_call_inst(
-                        self.ast_intrinsic_funcs.stop_time,
-                        [lineno_value].into_iter(),
-                    )
+                    .add_call_inst(self.ast_intrinsic_funcs.stop_time, [lineno_value].iter())
                     .unwrap();
                 (ValueSSA::Inst(call_inst), TypeInfo::RValue(ValTypeID::Void))
             }
@@ -758,15 +736,21 @@ impl IRTranslator {
             TypeInfo::FixArray(arr_ty) => arr_ty.get_element_type(&self.type_ctx),
             _ => panic!("Expected an array type, but got: {:?}", arrty_info),
         };
-        let gep = self
+        let gep_ref = self
             .ir_builder
-            .add_indexptr_inst(level0_ty, 4, 4, array, indices.iter().cloned())
+            .add_indexptr_inst(level0_ty, 4, 4, array, &indices)
             .unwrap();
-        let elemty = match &*self.ir_builder.module.get_inst(gep) {
-            InstData::IndexPtr(_, gep) => gep.ret_pointee_ty,
-            _ => panic!("Expected an index pointer instruction, but got: {:?}", gep),
+        let elemty = if let InstData::GEP(gep) =
+            gep_ref.to_data(&self.ir_builder.module.borrow_allocs().insts)
+        {
+            gep.last_unpacked_ty
+        } else {
+            panic!(
+                "Expected an index pointer instruction, but got: {:?}",
+                gep_ref
+            );
         };
-        (ValueSSA::Inst(gep), TypeInfo::LValue(elemty))
+        (ValueSSA::Inst(gep_ref), TypeInfo::LValue(elemty))
     }
 
     fn translate_alu_binop(
@@ -871,9 +855,9 @@ impl IRTranslator {
             Operator::Sub | Operator::Neg => {
                 let opcode = if is_float { Opcode::Fsub } else { Opcode::Sub };
                 let zero_value = if is_float {
-                    ConstData::make_float_valssa(FloatTypeKind::Ieee32, 0.0)
+                    ConstData::Float(FloatTypeKind::Ieee32, 0.0).into_ir()
                 } else {
-                    ConstData::make_int_valssa(32, 0)
+                    APInt::from(0u32).into()
                 };
                 let negsub_inst = self
                     .ir_builder
@@ -882,8 +866,8 @@ impl IRTranslator {
                 (ValueSSA::Inst(negsub_inst), TypeInfo::RValue(operand_ty))
             }
             Operator::LogicalNot => {
-                let false_val = ConstData::make_int_valssa(1, 0);
-                let true_val = ConstData::make_int_valssa(1, 1);
+                let false_val = APInt::from(false).into();
+                let true_val = APInt::from(true).into();
                 if is_bool {
                     // Logical NOT for boolean values
                     let select_inst = self
@@ -896,9 +880,9 @@ impl IRTranslator {
                     )
                 } else {
                     let zero_value = if is_float {
-                        ConstData::make_float_valssa(FloatTypeKind::Ieee32, 0.0)
+                        ConstData::Float(FloatTypeKind::Ieee32, 0.0).into_ir()
                     } else {
-                        ConstData::make_int_valssa(32, 0)
+                        APInt::from(0u32).into()
                     };
                     // Logical NOT means equal to zero
                     let cmp_inst = self
@@ -950,7 +934,7 @@ impl IRTranslator {
         // Add the call instruction
         let call_inst = self
             .ir_builder
-            .add_call_inst(func_symbol, args.iter().cloned())
+            .add_call_inst(func_symbol, args.iter())
             .expect("Failed to add call instruction");
         (
             ValueSSA::Inst(call_inst),
@@ -1164,7 +1148,7 @@ impl IRTranslator {
 mod testing {
     use std::path::PathBuf;
 
-    use remusys_ir::ir::util::writer::write_ir_module;
+    use remusys_ir::ir::write_ir_module;
     use remusys_lang::{ast::print::AstPrinter, normalize::AstNormalizer, parser::parse_sysy_file};
 
     use super::*;
@@ -1235,6 +1219,6 @@ mod testing {
         eprintln!("Writing IR to: {}", ir_path);
         let ir_file = std::fs::File::create(ir_path).unwrap();
         let mut ir_writer = std::io::BufWriter::new(ir_file);
-        write_ir_module(&ir_module, &mut ir_writer, false, false, false);
+        write_ir_module(&ir_module, &mut ir_writer);
     }
 }
