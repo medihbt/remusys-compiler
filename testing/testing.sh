@@ -16,7 +16,7 @@ export RUST_BACKTRACE=1
 
 debug_build=0
 
-rm -rf "$ir_output" "$asm_output" "$log_output"
+rm -rf "$ir_output" "$asm_output" "$log_output" "$exe_output" "$exe_test_output"
 
 mkdir -p "$sysy_srcs"
 mkdir -p "$ir_output"
@@ -50,7 +50,7 @@ function process_one_source() {
     local ir_file="$(basename "$src" .sy).ll"
     local log_file="$log_output/$src_basename.log"
 
-    "$remusys_bin" "$src" --emit-ir -S -o "$asm_file" > "$log_file" 2>&1
+    "$remusys_bin" "$src" --emit-mir --emit-ir -S -o "$asm_file" > "$log_file" 2>&1
 
     if [ $? -ne 0 ]; then
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
@@ -92,11 +92,11 @@ function process_one_source() {
     local test_output="$exe_test_output/$src_basename.out"
     if [ -f "$test_input" ]; then
         echo "Running $src_basename with input from $test_input"
-        "$exe_file" < "$test_input" > "$test_output" 2>&1
+        "$exe_file" < "$test_input" 1>"$test_output" 2>"$test_output.err"
         exit_code=$?
     else
         echo "No input file $test_input for $src_basename, running without input"
-        "$exe_file" > "$test_output" 2>&1
+        "$exe_file" 1>"$test_output" 2>"$test_output.err"
         exit_code=$?
     fi
 
