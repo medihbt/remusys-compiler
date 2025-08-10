@@ -1,45 +1,51 @@
 #!/bin/bash
 
-project_dir=$(git rev-parse --show-toplevel)
-sysy_base="$project_dir/testing/test-functional"
-sysy_srcs="$sysy_base/sysy"
-exe_test_input="$sysy_base/in"
+default_srcdir="test-functional"
 
-output_base="$project_dir/target/test-functional"
-ir_output="$output_base/ir"
-asm_output="$output_base/asm"
-exe_output="$output_base/exe"
-log_output="$output_base/logs"
-exe_test_output="$output_base/exe-testout"
+function init_dirs() {
+    project_dir=$(git rev-parse --show-toplevel)
+    sysy_base="$project_dir/testing/$default_srcdir"
+    sysy_srcs="$sysy_base/sysy"
+    exe_test_input="$sysy_base/in"
+
+    output_base="$project_dir/target/$default_srcdir"
+    ir_output="$output_base/ir"
+    asm_output="$output_base/asm"
+    exe_output="$output_base/exe"
+    log_output="$output_base/logs"
+    exe_test_output="$output_base/exe-testout"
+
+    rm -rf "$ir_output" "$asm_output" "$log_output" "$exe_output" "$exe_test_output" "$ir_output"
+
+    mkdir -p "$sysy_srcs"
+    mkdir -p "$ir_output"
+    mkdir -p "$asm_output"
+    mkdir -p "$log_output"
+    mkdir -p "$exe_output"
+    mkdir -p "$exe_test_output"
+}
 
 export RUST_BACKTRACE=1
 
 debug_build=0
 
-rm -rf "$ir_output" "$asm_output" "$log_output" "$exe_output" "$exe_test_output"
-
-mkdir -p "$sysy_srcs"
-mkdir -p "$ir_output"
-mkdir -p "$asm_output"
-mkdir -p "$log_output"
-mkdir -p "$exe_output"
-mkdir -p "$exe_test_output"
-
 function build_project() {
     local debug_build="$1"
 
     if [ -z "$debug_build" ]; then
-        cargo build || {
-            echo "Failed to build the project. Please check the errors above."
-            exit 1
-        }
-        remusys_bin="$project_dir/target/debug/compiler"
-    else
+        echo "building at release mode"
         cargo build --release || {
             echo "Failed to build the project in release mode. Please check the errors above."
             exit 1
         }
         remusys_bin="$project_dir/target/release/compiler"
+    else
+        echo "building at debug mode"
+        cargo build || {
+            echo "Failed to build the project. Please check the errors above."
+            exit 1
+        }
+        remusys_bin="$project_dir/target/debug/compiler"
     fi
 }
 
@@ -50,7 +56,7 @@ function process_one_source() {
     local ir_file="$(basename "$src" .sy).ll"
     local log_file="$log_output/$src_basename.log"
 
-    "$remusys_bin" "$src" --emit-mir --emit-ir -S -o "$asm_file" > "$log_file" 2>&1
+    "$remusys_bin" "$src" --emit-mir --emit-ir -S -O1 -o "$asm_file" > "$log_file" 2>&1
 
     if [ $? -ne 0 ]; then
         mv "$sysy_srcs/$ir_file" "$ir_output/$ir_file"
@@ -128,6 +134,15 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             ;;
+        --dir)
+            if [[ -n "$2" ]]; then
+                default_srcdir="$2"
+                shift 2
+            else
+                echo "Error: --dir requires a directory argument"
+                exit 1
+            fi
+            ;;
         --help|-h)
             echo "Remusys Compiler Testing Script"
             echo "Usage: $0 [options]"
@@ -164,6 +179,7 @@ function prepare_sylib() {
     sylib_file="$sylib_output/sylib.o"
 }
 
+init_dirs
 prepare_sylib
 build_project "$debug_build"
 

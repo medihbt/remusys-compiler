@@ -155,7 +155,7 @@ impl<'a> ArrayInitStateStack<'a> {
 
         match ast_exp {
             AstExpr::None => match type_req {
-                IRTypeID::Int(nbits) => IRConstData::Int(nbits, 0),
+                IRTypeID::Int(nbits) => APInt::new(0, nbits).into(),
                 IRTypeID::Float(kind) => IRConstData::Float(kind, 0.0),
 
                 IRTypeID::Ptr

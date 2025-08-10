@@ -243,8 +243,11 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
                 TempData::IR(ir_module)
             }
             ActionStep::Optimize => {
-                eprintln!("Optimization step not implemented yet");
-                temp_data
+                let TempData::IR(ir_module) = temp_data else {
+                    return Err("Expected IR data for optimization".to_string());
+                };
+                remusys_ir::opt::optimize_module(&ir_module);
+                TempData::IR(ir_module)
             }
             ActionStep::OutputAsm(name, emit_mir) => {
                 let ir_module = match temp_data {

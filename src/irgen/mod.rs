@@ -3,8 +3,8 @@ use std::{collections::HashMap, hash::Hash, ops::Deref, rc::Rc};
 use remusys_ir::{
     base::{APInt, INullableValue, SlabRef},
     ir::{
-        BlockRef as IRBlockRef, CmpCond, ConstData, GlobalRef, IRBuilder, IRBuilderFocus,
-        ISubValueSSA, Module as IRModule, Opcode, ValueSSA,
+        BlockRef as IRBlockRef, CmpCond, ConstData, FuncRef, GlobalData, GlobalRef, IRBuilder,
+        IRBuilderFocus, ISubGlobal, ISubValueSSA, Linkage, Module as IRModule, Opcode, ValueSSA,
         inst::{InstData, InstRef},
     },
     typing::{
@@ -238,9 +238,16 @@ impl IRTranslator {
                     // Translate the initializer expression
                     self.translate_expr_force_const(&var.initval, var_content_ty.clone())
                 };
-                self.ir_builder
+                let ir_val = self
+                    .ir_builder
                     .define_var(name.as_str(), var.is_const(), var_content_ty, initval)
-                    .expect("Failed to define global variable")
+                    .expect("Failed to define global variable");
+                let allocs = self.ir_builder.module.borrow_allocs();
+                let GlobalData::Var(v) = ir_val.to_data(&allocs.globals) else {
+                    panic!("Expected a global variable, but got: {:?}", ir_val);
+                };
+                v.set_linkage(Linkage::Private);
+                ir_val
             }
             .unwrap();
             // Insert the global variable into the symbol map
@@ -306,6 +313,11 @@ impl IRTranslator {
                 .ir_builder
                 .define_function_with_unreachable(name, func_ty)
                 .expect(format!("Failed to define function `{}`", name).as_str());
+            if name != "main" {
+                let allocs = self.ir_builder.module.borrow_allocs();
+                let func = FuncRef(func_ref).to_data(&allocs.globals);
+                func.set_linkage(Linkage::Private);
+            }
             // Insert the function into the symbol map
             self.symbols
                 .insert_function(Rc::clone(ast_func), func_ref, func_ty);
@@ -321,13 +333,8 @@ impl IRTranslator {
         match expr {
             AstExpr::None => ValueSSA::ConstData(ConstData::Zero(type_req)),
             AstExpr::Literal(Literal::Int(i)) => match type_req {
-                ValTypeID::Int(1) => {
-                    ValueSSA::ConstData(ConstData::Int(1, if *i == 0 { 0 } else { 1 }))
-                }
-                ValTypeID::Int(bits) => {
-                    let value = APInt::new(*i, bits);
-                    value.into()
-                }
+                ValTypeID::Int(1) => APInt::from(*i != 0).into(),
+                ValTypeID::Int(bits) => APInt::new(*i, bits).into(),
                 _ => APInt::from(*i).into(),
             },
             AstExpr::Literal(Literal::Float(f)) => {
@@ -577,6 +584,7 @@ impl IRTranslator {
 
                 if arr_list.is_zero_initializer() {
                     // If the initializer is a zero initializer, we can use memset
+                    log::debug!("array list {arr_list:#?}");
                     self.ir_builder
                         .add_call_inst(
                             self.ir_stdlib_funcs.memset,
@@ -1100,11 +1108,10 @@ impl IRTranslator {
                 TypeInfo::RValue(ValTypeID::Int(_)) => {
                     // 因为 Remusys-SST 没有布尔常量, 正规化语法树时有可能会得到一个 int 常量.
                     // 这里特殊处理之.
-                    if let ValueSSA::ConstData(ConstData::Int(_, n)) = cond_ir {
-                        ValueSSA::ConstData(ConstData::Int(1, if n == 0 { 0 } else { 1 }))
-                    } else {
+                    let Some(i) = cond_ir.as_int() else {
                         panic!("Expected a boolean condition, but got: {:?}", cond_ty);
-                    }
+                    };
+                    APInt::from(i != 0).into()
                 }
                 // if 表达式返回的如果不是布尔或者整数常量, 那就意味着正规化没做好.
                 _ => panic!(
