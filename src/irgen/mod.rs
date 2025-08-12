@@ -7,11 +7,7 @@ use remusys_ir::{
         IRBuilderFocus, ISubGlobal, ISubValueSSA, Linkage, Module as IRModule, Opcode, ValueSSA,
         inst::{InstData, InstRef},
     },
-    typing::{
-        context::{PlatformPolicy, TypeContext},
-        id::ValTypeID,
-        types::FloatTypeKind,
-    },
+    typing::{ArchInfo, FPKind, FuncTypeRef, TypeContext, ValTypeID},
 };
 use remusys_lang::{
     ast::{
@@ -106,8 +102,8 @@ impl Default for AstIntrinsicFuncs {
 }
 
 impl IRTranslator {
-    pub fn new(ast_module: &AstModule, platform_policy: PlatformPolicy) -> Self {
-        let type_ctx = TypeContext::new_rc(platform_policy);
+    pub fn new(ast_module: &AstModule, arch: ArchInfo) -> Self {
+        let type_ctx = TypeContext::new_rc(arch);
         let ir_builder = IRBuilder::new(IRModule::new(ast_module.file.clone(), type_ctx.clone()));
         let symbols = SymbolMap::new();
 
@@ -130,7 +126,7 @@ impl IRTranslator {
     pub fn new_competition(ast_module: &AstModule) -> Self {
         Self::new(
             ast_module,
-            PlatformPolicy {
+            ArchInfo {
                 ptr_nbits: 64,
                 reg_nbits: 64,
             },
@@ -140,8 +136,7 @@ impl IRTranslator {
     fn add_missing_timer_functions(&mut self) {
         // type: Fn(i32) -> ()
         let timer_func_ty =
-            self.type_ctx
-                .make_func_type(&[ValTypeID::Int(32)], ValTypeID::Void, false);
+            FuncTypeRef::new(&self.type_ctx, ValTypeID::Void, false, [ValTypeID::Int(32)]);
 
         // void _sysy_starttime(int lineno);
         let starttime_func = self
@@ -161,14 +156,17 @@ impl IRTranslator {
 }
 
 impl IRTranslator {
-    pub fn translate(mut self, ast_module: &AstModule) -> Rc<IRModule> {
+    pub fn translate(mut self, ast_module: &AstModule) -> IRModule {
         // 添加标准库函数
         self.add_ir_extra_stdlib();
 
         for gdef in ast_module.global_defs.iter() {
             self.translate_global_def(gdef);
         }
-        Rc::new(self.ir_builder.module)
+
+        let mut module = self.ir_builder.module;
+        module.gc_mark_sweep_mut([]);
+        module
     }
 
     /// 在 IR 层额外添加下面的标准库函数:
@@ -183,8 +181,7 @@ impl IRTranslator {
                 ValTypeID::Int(32), // size
             ];
             let memset_func_ty =
-                self.type_ctx
-                    .make_func_type(&memset_arg_ty, ValTypeID::Void, false);
+                FuncTypeRef::new(&self.type_ctx, ValTypeID::Void, false, memset_arg_ty);
             self.ir_builder
                 .declare_function("memset", memset_func_ty)
                 .expect("Failed to declare memset function")
@@ -196,8 +193,7 @@ impl IRTranslator {
                 ValTypeID::Int(32), // size
             ];
             let memcpy_func_ty =
-                self.type_ctx
-                    .make_func_type(&memcpy_arg_ty, ValTypeID::Void, false);
+                FuncTypeRef::new(&self.type_ctx, ValTypeID::Void, false, memcpy_arg_ty);
             self.ir_builder
                 .declare_function("memcpy", memcpy_func_ty)
                 .expect("Failed to declare memcpy function")
@@ -233,7 +229,7 @@ impl IRTranslator {
                 .expect("Global variable type must be allocatable");
             let ir_global = {
                 let initval = if let AstExpr::None = &var.initval {
-                    ValueSSA::ConstData(ConstData::Zero(var_content_ty.clone()))
+                    ValueSSA::new_zero(var_content_ty)
                 } else {
                     // Translate the initializer expression
                     self.translate_expr_force_const(&var.initval, var_content_ty.clone())
@@ -286,7 +282,7 @@ impl IRTranslator {
                 ),
             }
         };
-        let arg_ty = ast_func
+        let arg_ty: Box<[ValTypeID]> = ast_func
             .resolved_args
             .iter()
             .map(|arg| {
@@ -294,10 +290,8 @@ impl IRTranslator {
                 let arg_typeinfo = TypeInfo::new(arg_ast_ty, &self.type_ctx);
                 arg_typeinfo.get_value_type_id()
             })
-            .collect::<Box<_>>();
-        let func_ty = self
-            .type_ctx
-            .make_func_type(arg_ty.as_ref(), ret_ty, ast_func.is_vararg);
+            .collect();
+        let func_ty = FuncTypeRef::new(&self.type_ctx, ret_ty, ast_func.is_vararg, arg_ty);
 
         if ast_func.is_extern() {
             // Extern function, just declare it
@@ -331,14 +325,14 @@ impl IRTranslator {
 
     fn translate_expr_force_const(&mut self, expr: &AstExpr, type_req: ValTypeID) -> ValueSSA {
         match expr {
-            AstExpr::None => ValueSSA::ConstData(ConstData::Zero(type_req)),
+            AstExpr::None => ValueSSA::new_zero(type_req),
             AstExpr::Literal(Literal::Int(i)) => match type_req {
                 ValTypeID::Int(1) => APInt::from(*i != 0).into(),
                 ValTypeID::Int(bits) => APInt::new(*i, bits).into(),
                 _ => APInt::from(*i).into(),
             },
             AstExpr::Literal(Literal::Float(f)) => {
-                ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64))
+                ValueSSA::ConstData(ConstData::Float(FPKind::Ieee32, *f as f64))
             }
             AstExpr::String(str) => {
                 let str_ref =
@@ -663,8 +657,8 @@ impl IRTranslator {
                 (APInt::from(*i).into(), TypeInfo::RValue(ValTypeID::Int(32)))
             }
             AstExpr::Literal(Literal::Float(f)) => (
-                ValueSSA::ConstData(ConstData::Float(FloatTypeKind::Ieee32, *f as f64)),
-                TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
+                ValueSSA::ConstData(ConstData::Float(FPKind::Ieee32, *f as f64)),
+                TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)),
             ),
             AstExpr::String(s) => {
                 let str_ref =
@@ -777,7 +771,7 @@ impl IRTranslator {
             );
         }
         let is_float = match lhs_ty {
-            TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)) => true,
+            TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)) => true,
             TypeInfo::RValue(ValTypeID::Int(32)) => false,
             _ => panic!("Unsupported type for binary operation: {:?}", lhs_ty),
         };
@@ -814,7 +808,7 @@ impl IRTranslator {
             );
         }
         let is_float = match lhs_ty {
-            TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)) => true,
+            TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)) => true,
             TypeInfo::RValue(ValTypeID::Int(32)) => false,
             _ => panic!("Unsupported type for comparison: {:?}", lhs_ty),
         };
@@ -852,8 +846,8 @@ impl IRTranslator {
         let (operand, operand_ty) = self.translate_alu_expr(func_stat, &unary_exp.expr);
 
         let (is_float, is_bool, operand_ty) = match operand_ty {
-            TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)) => {
-                (true, false, ValTypeID::Float(FloatTypeKind::Ieee32))
+            TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)) => {
+                (true, false, ValTypeID::Float(FPKind::Ieee32))
             }
             TypeInfo::RValue(ValTypeID::Int(32)) => (false, false, ValTypeID::Int(32)),
             TypeInfo::RValue(ValTypeID::Int(1)) => (false, true, ValTypeID::Int(1)),
@@ -863,7 +857,7 @@ impl IRTranslator {
             Operator::Sub | Operator::Neg => {
                 let opcode = if is_float { Opcode::Fsub } else { Opcode::Sub };
                 let zero_value = if is_float {
-                    ConstData::Float(FloatTypeKind::Ieee32, 0.0).into_ir()
+                    ConstData::Float(FPKind::Ieee32, 0.0).into_ir()
                 } else {
                     APInt::from(0u32).into()
                 };
@@ -888,7 +882,7 @@ impl IRTranslator {
                     )
                 } else {
                     let zero_value = if is_float {
-                        ConstData::Float(FloatTypeKind::Ieee32, 0.0).into_ir()
+                        ConstData::Float(FPKind::Ieee32, 0.0).into_ir()
                     } else {
                         APInt::from(0u32).into()
                     };
@@ -946,7 +940,7 @@ impl IRTranslator {
             .expect("Failed to add call instruction");
         (
             ValueSSA::Inst(call_inst),
-            TypeInfo::RValue(func_ty.get_return_type(&self.type_ctx)),
+            TypeInfo::RValue(func_ty.ret_type(&self.type_ctx)),
         )
     }
 
@@ -959,13 +953,9 @@ impl IRTranslator {
         let (inst, ret_info) = match cast.kind {
             Operator::ItoF => (
                 self.ir_builder
-                    .add_cast_inst(
-                        Opcode::Sitofp,
-                        ValTypeID::Float(FloatTypeKind::Ieee32),
-                        operand,
-                    )
+                    .add_cast_inst(Opcode::Sitofp, ValTypeID::Float(FPKind::Ieee32), operand)
                     .unwrap(),
-                TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
+                TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)),
             ),
             Operator::FtoI => (
                 self.ir_builder
@@ -981,13 +971,9 @@ impl IRTranslator {
             ),
             Operator::BoolToFloat => (
                 self.ir_builder
-                    .add_cast_inst(
-                        Opcode::Uitofp,
-                        ValTypeID::Float(FloatTypeKind::Ieee32),
-                        operand,
-                    )
+                    .add_cast_inst(Opcode::Uitofp, ValTypeID::Float(FPKind::Ieee32), operand)
                     .unwrap(),
-                TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
+                TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)),
             ),
             Operator::LValueToRValue => {
                 let load_ptr_target_ty = operand_ty.get_alloca_data_type().unwrap();

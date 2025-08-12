@@ -4,11 +4,13 @@ use std::{
 };
 
 use remusys_ir::{
-    base::APInt, ir::{
+    base::APInt,
+    ir::{
         Array as IRArrayExpr, ConstData as IRConstData, ConstExprData as IRExprData,
         ConstExprRef as IRExprRef, GlobalRef as IRGlobalRef, IRBuilder, Module as IRModule,
         ValueSSA as IRValue,
-    }, typing::id::ValTypeID as IRTypeID
+    },
+    typing::{ArrayTypeRef, ValTypeID as IRTypeID},
 };
 use remusys_lang::ast::expr::{
     Expr as AstExpr, initlist::ArrayInitList, literal::Literal as AstLiteral,
@@ -29,10 +31,11 @@ pub(super) fn translate_string_literal(
     }
     // String symbol name: mangle(`Core::Builtin::StringLiteral`).$id
     let str_name = format!("_Z4Core7Builtin14StringLiteral.{}", str_map.len());
-    let str_arrty = module.type_ctx.make_array_type(
-        literal.len() + 1, // +1 for null terminator
-        IRTypeID::Int(8),  // char type
-    );
+    // let str_arrty = module.type_ctx.make_array_type(
+    //     literal.len() + 1, // +1 for null terminator
+    //     IRTypeID::Int(8),  // char type
+    // );
+    let str_arrty = ArrayTypeRef::new(&module.type_ctx, IRTypeID::Int(8), literal.len() + 1);
     let str_initval = {
         let mut elems = Vec::with_capacity(literal.len() + 1);
         for b in literal.bytes() {

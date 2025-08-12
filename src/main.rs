@@ -177,7 +177,7 @@ fn make_action_queue(cli: Cli) -> Vec<ActionStep> {
 pub enum TempData {
     Ast(AstModule),
     Sst(AstModule),
-    IR(Rc<Module>),
+    IR(Module),
     Asm(Rc<MirModule>, Rc<Module>),
     None,
 }
@@ -251,7 +251,7 @@ fn remusys_main(actions: Vec<ActionStep>) -> Result<(), String> {
             }
             ActionStep::OutputAsm(name, emit_mir) => {
                 let ir_module = match temp_data {
-                    TempData::IR(ir) => ir,
+                    TempData::IR(ir) => Rc::new(ir),
                     _ => return Err("Expected IR data for assembly output".to_string()),
                 };
                 println!("Outputting assembly to {}", name);

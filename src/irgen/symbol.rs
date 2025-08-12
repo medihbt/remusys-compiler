@@ -9,7 +9,7 @@ use std::{
 
 use remusys_ir::{
     ir::{ValueSSA, GlobalRef},
-    typing::types::FuncTypeRef,
+    typing::FuncTypeRef,
 };
 use remusys_lang::ast::{
     expr::ident::Ident,

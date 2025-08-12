@@ -1,7 +1,8 @@
 use super::*;
 use remusys_ir::{
     base::{APInt, INullableValue},
-    typing::context::TypeContext,
+    ir::ISubValueSSA,
+    typing::TypeContext,
 };
 
 pub(super) struct ArrayInitState {
@@ -101,7 +102,7 @@ impl<'a> ArrayInitStateStack<'a> {
                 for idx in ast_final_index_range {
                     let ast_exp = &self.array.final_elems[idx];
                     let ir_const = Self::ast_data_make_const(ast_exp, elem_type.clone());
-                    ir_building.push(IRValue::ConstData(ir_const));
+                    ir_building.push(ir_const);
                 }
                 let ir_expr_data =
                     IRExprData::Array(IRArrayExpr::from_vec(this_level_type, ir_building));
@@ -146,7 +147,7 @@ impl<'a> ArrayInitStateStack<'a> {
         ret
     }
 
-    fn ast_data_make_const(ast_exp: &AstExpr, type_req: IRTypeID) -> IRConstData {
+    fn ast_data_make_const(ast_exp: &AstExpr, type_req: IRTypeID) -> IRValue {
         assert!(
             matches!(type_req, IRTypeID::Int(_) | IRTypeID::Float(_)),
             "Expected a numeric type for constant expression, got: {:?}",
@@ -156,12 +157,12 @@ impl<'a> ArrayInitStateStack<'a> {
         match ast_exp {
             AstExpr::None => match type_req {
                 IRTypeID::Int(nbits) => APInt::new(0, nbits).into(),
-                IRTypeID::Float(kind) => IRConstData::Float(kind, 0.0),
+                IRTypeID::Float(kind) => IRConstData::Float(kind, 0.0).into_ir(),
 
                 IRTypeID::Ptr
                 | IRTypeID::Array(_)
                 | IRTypeID::Struct(_)
-                | IRTypeID::StructAlias(_) => IRConstData::Zero(type_req),
+                | IRTypeID::StructAlias(_) => IRValue::new_zero(type_req),
 
                 IRTypeID::Void | IRTypeID::Func(_) => {
                     panic!("Cannot create constant expression for un-instantiable type")
@@ -175,7 +176,7 @@ impl<'a> ArrayInitStateStack<'a> {
                 ),
             },
             AstExpr::Literal(AstLiteral::Float(f)) => match type_req {
-                IRTypeID::Float(kind) => IRConstData::Float(kind, *f as f64),
+                IRTypeID::Float(kind) => IRConstData::Float(kind, *f as f64).into_ir(),
                 _ => panic!(
                     "Expected a float type for constant expression, got: {:?}",
                     type_req
@@ -197,7 +198,7 @@ mod testing {
 
     use remusys_ir::{
         ir::{ConstExprRef, IRWriter, ISubValueSSA},
-        typing::context::PlatformPolicy,
+        typing::ArchInfo,
     };
     use remusys_lang::typing::{AstType, FixedArrayType};
 
@@ -205,7 +206,7 @@ mod testing {
 
     #[test]
     fn build_array_init_const() {
-        let type_ctx = TypeContext::new_rc(PlatformPolicy::new_host());
+        let type_ctx = TypeContext::new_rc(ArchInfo::new_host());
         // Example: `let arr: [[i32; 3]; 2] = [[1, 2, 3], [4, 5, 6]]`
         let intty = AstType::Int;
         let aint3ty = AstType::FixedArray(Rc::new(FixedArrayType {

@@ -1,8 +1,4 @@
-use remusys_ir::typing::{
-    context::TypeContext,
-    id::ValTypeID,
-    types::{ArrayTypeRef, FloatTypeKind, FuncTypeRef},
-};
+use remusys_ir::typing::{ArrayTypeRef, FPKind, FuncTypeRef, TypeContext, ValTypeID};
 use remusys_lang::typing::AstType;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -58,7 +54,7 @@ impl TypeInfo {
             AstType::Void => TypeInfo::RValue(ValTypeID::Void),
             AstType::Bool => TypeInfo::RValue(ValTypeID::new_boolean()),
             AstType::Int => TypeInfo::RValue(ValTypeID::Int(32)),
-            AstType::Float => TypeInfo::RValue(ValTypeID::Float(FloatTypeKind::Ieee32)),
+            AstType::Float => TypeInfo::RValue(ValTypeID::Float(FPKind::Ieee32)),
             AstType::Str => TypeInfo::DynArray(ValTypeID::Int(8)),
             AstType::FixedArray(farr) => {
                 let elem_type_info = TypeInfo::new(&farr.elemty, type_ctx);
@@ -67,7 +63,7 @@ impl TypeInfo {
                     Some(val_type) => val_type,
                     None => panic!("Fixed array element type must be allocatable"),
                 };
-                let ir_type = type_ctx.make_array_type(length, elem_type);
+                let ir_type = ArrayTypeRef::new(type_ctx, elem_type, length);
                 TypeInfo::FixArray(ir_type)
             }
             AstType::DynArray(ast_type) => {

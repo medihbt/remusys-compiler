@@ -106,7 +106,12 @@ function process_one_source() {
         exit_code=$?
     fi
 
-    echo "$exit_code" >> "$test_output"
+    # Check if test_output is not empty and doesn't end with a newline
+    if [ -s "$test_output" ] && [ "$(tail -c 1 "$test_output" | wc -l)" -eq 0 ]; then
+        echo -e "\n$exit_code" >> "$test_output"
+    else
+        echo "$exit_code" >> "$test_output"
+    fi
     echo "Execution of $exe_file completed with exit code $exit_code. Output saved to $test_output"
 }
 
