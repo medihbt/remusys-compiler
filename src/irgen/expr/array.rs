@@ -104,14 +104,16 @@ impl<'a> ArrayInitStateStack<'a> {
                     let ir_const = Self::ast_data_make_const(ast_exp, elem_type.clone());
                     ir_building.push(ir_const);
                 }
+                let mut allocs = module.borrow_allocs_mut();
                 let ir_expr_data =
-                    IRExprData::Array(IRArrayExpr::from_vec(this_level_type, ir_building));
-                IRExprRef::from_alloc(&mut module.borrow_allocs_mut().exprs, ir_expr_data)
+                    IRExprData::Array(IRArrayExpr::new(this_level_type, &allocs, ir_building));
+                IRExprRef::from_alloc(&mut allocs.exprs, ir_expr_data)
             } else if this_level_build_idx == this_level_dimension {
+                let mut allocs = module.borrow_allocs_mut();
                 // 当前层级的数组表达式已经构建完毕, 需要将其转换为 IR 表达式
                 let ir_expr_data =
-                    IRExprData::Array(IRArrayExpr::from_vec(this_level_type, ir_building));
-                IRExprRef::from_alloc(&mut module.borrow_allocs_mut().exprs, ir_expr_data)
+                    IRExprData::Array(IRArrayExpr::new(this_level_type, &allocs, ir_building));
+                IRExprRef::from_alloc(&mut allocs.exprs, ir_expr_data)
             } else if this_level_build_idx < this_level_dimension {
                 // 当前层级的数组表达式还未构建完毕, 需要继续处理下一层级
                 let child_layer = ast_layer + 1;
@@ -197,7 +199,7 @@ mod testing {
     use std::rc::Rc;
 
     use remusys_ir::{
-        ir::{ConstExprRef, IRWriter, ISubValueSSA},
+        ir::{ExprRef, IRWriter, ISubValueSSA},
         typing::ArchInfo,
     };
     use remusys_lang::typing::{AstType, FixedArrayType};
@@ -240,7 +242,7 @@ mod testing {
         write_ir_expr(&module, &mut std::io::stdout(), expr_ref);
     }
 
-    fn write_ir_expr(module: &IRModule, out: &mut dyn std::io::Write, expr_ref: ConstExprRef) {
+    fn write_ir_expr(module: &IRModule, out: &mut dyn std::io::Write, expr_ref: ExprRef) {
         let writer = IRWriter::from_module(out, module);
         expr_ref.fmt_ir(&writer).unwrap();
     }

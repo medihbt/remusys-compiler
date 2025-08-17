@@ -32,7 +32,7 @@ debug_build=0
 function build_project() {
     local debug_build="$1"
 
-    if [ -z "$debug_build" ]; then
+    if [ "$debug_build" == 0 ]; then
         echo "building at release mode"
         cargo build --release || {
             echo "Failed to build the project in release mode. Please check the errors above."
