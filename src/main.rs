@@ -158,10 +158,26 @@ fn make_action_queue(cli: Cli) -> Vec<ActionStep> {
         step_queue.push(ActionStep::OutputIr(ir_output));
     }
     if do_until_translate {
+        if emit_ir {
+            let ir_output = if do_until_translate && custom_output {
+                cli.output_file.as_ref().unwrap().to_string()
+            } else {
+                format!("{}.ll", input_basename)
+            };
+            step_queue.push(ActionStep::OutputIr(ir_output));
+        }
         return step_queue;
     }
     if should_optimize {
         step_queue.push(ActionStep::Optimize);
+    }
+    if emit_ir {
+        let ir_output = if do_until_translate && custom_output {
+            cli.output_file.as_ref().unwrap().to_string()
+        } else {
+            format!("{}.ll", input_basename)
+        };
+        step_queue.push(ActionStep::OutputIr(ir_output));
     }
     if emit_asm {
         let asm_output = if custom_output {
